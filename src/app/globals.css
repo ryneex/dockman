@@ -1,0 +1,88 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  --color-canvas: #0b0d12;
+  --color-elevated: #12151c;
+  --color-hover: #1a1e28;
+  --color-border: rgb(255 255 255 / 0.06);
+  --color-border-strong: rgb(255 255 255 / 0.1);
+  --color-ink: #e8ecf4;
+  --color-muted: #8b93a7;
+  --color-faint: #5c6578;
+  --color-accent: #5b8cff;
+  --color-accent-glow: rgb(91 140 255 / 0.2);
+  --color-running: #34d399;
+  --color-paused: #fbbf24;
+  --color-exited: #f87171;
+  --color-created: #8b93a7;
+
+  --radius-control: 8px;
+  --radius-card: 12px;
+
+  --container-dialog: 35rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+html[data-ui-scale="compact"] {
+  font-size: 13px;
+}
+
+html[data-ui-scale="default"] {
+  font-size: 15px;
+}
+
+html[data-ui-scale="comfortable"] {
+  font-size: 17px;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: rgb(91 140 255 / 0.28);
+  color: #e8ecf4;
+}
+
+:focus-visible {
+  outline: 1px solid rgb(91 140 255 / 0.7);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

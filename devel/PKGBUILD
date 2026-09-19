@@ -1,0 +1,60 @@
+# Maintainer: Dockman contributors
+# Metapackage for Tauri + Dockman build deps on Arch.
+#   cd devel && makepkg -si
+#   sudo pacman -Rns dockman-devel
+
+pkgname=dockman-devel
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Metapackage: Arch packages needed to build and run Dockman (Tauri)"
+arch=('any')
+url="https://github.com/sajid/docker-desktop-linux"
+license=('MIT')
+depends=(
+  # Tauri Linux prerequisites
+  webkit2gtk-4.1
+  curl
+  wget
+  file
+  openssl
+  appmenu-gtk-module
+  libappindicator-gtk3
+  librsvg
+  xdotool
+  # base-devel group (groups cannot be listed in depends)
+  autoconf
+  automake
+  binutils
+  bison
+  debugedit
+  fakeroot
+  findutils
+  flex
+  gawk
+  gcc
+  gettext
+  grep
+  groff
+  gzip
+  libtool
+  m4
+  make
+  patch
+  pkgconf
+  sed
+  texinfo
+  which
+)
+
+package() {
+  install -d "$pkgdir/usr/share/doc/$pkgname"
+  cat >"$pkgdir/usr/share/doc/$pkgname/README" <<'EOF'
+dockman-devel pulls in the Arch packages needed to build Dockman with Tauri.
+
+Install:  makepkg -si
+Remove:   sudo pacman -Rns dockman-devel
+
+pacman -Rns drops this metapackage and any of its dependencies that nothing
+else still needs. Core tools such as gcc stay if another package requires them.
+EOF
+}
