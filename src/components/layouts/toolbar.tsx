@@ -1,7 +1,6 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 
-import { useFilter, usePageActionBar } from "@/components/providers"
-import { Button } from "@/components/ui/button"
+import { useFilter } from "@/components/providers"
 import { SearchField } from "@/components/ui/search-field"
 
 function isEditable(target: EventTarget | null) {
@@ -9,9 +8,8 @@ function isEditable(target: EventTarget | null) {
   return Boolean(target.closest("input, textarea, [contenteditable='true']"))
 }
 
-export function Toolbar() {
+export function Toolbar({ children }: { children?: ReactNode }) {
   const { query, setQuery } = useFilter()
-  const action = usePageActionBar()
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -28,15 +26,16 @@ export function Toolbar() {
   return (
     <div className="border-border flex h-12 shrink-0 items-center gap-2.5 border-b px-4">
       <SearchField ref={inputRef} value={query} onChange={setQuery} />
-      {action ? (
-        <Button
-          variant="primary"
-          icon={action.icon ? <action.icon strokeWidth={2} /> : undefined}
-          onClick={action.onClick}
-        >
-          {action.label}
-        </Button>
-      ) : null}
+      {children}
+    </div>
+  )
+}
+
+export function ListPage({ action, children }: { action: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Toolbar>{action}</Toolbar>
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
     </div>
   )
 }

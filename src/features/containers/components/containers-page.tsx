@@ -14,7 +14,8 @@ import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { CopyId, InspectDrawer, LogsDrawer, RowActions } from "@/components/common"
-import { useFilter, usePageAction } from "@/components/providers"
+import { ListPage } from "@/components/layouts"
+import { useFilter } from "@/components/providers"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
@@ -41,8 +42,6 @@ export function ContainersPage() {
   const [filesId, setFilesId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<ContainerRow | null>(null)
-
-  usePageAction("New", () => setCreateOpen(true), Plus)
 
   const rows = useMemo(
     () =>
@@ -221,9 +220,10 @@ export function ContainersPage() {
   )
 
   return (
-    <>
+    <ListPage
+      action={<RunContainerDialog open={createOpen} trigger onOpenChange={setCreateOpen} />}
+    >
       {body}
-      <RunContainerDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       <InspectDrawer
         open={Boolean(inspectId)}
         title={selected?.name ?? "Inspect"}
@@ -253,6 +253,6 @@ export function ContainersPage() {
         onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
         onClose={() => setRemoveTarget(null)}
       />
-    </>
+    </ListPage>
   )
 }

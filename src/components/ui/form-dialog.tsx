@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog"
 import { motion } from "framer-motion"
 import { Loader2, X } from "lucide-react"
-import type { FormEvent, ReactNode } from "react"
+import type { FormEvent, ReactElement, ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { motionOrInstant, panel } from "@/lib/motion"
@@ -14,8 +14,9 @@ export function FormDialog({
   confirmIcon,
   pending,
   error,
+  trigger,
   onSubmit,
-  onClose,
+  onOpenChange,
   children,
 }: {
   open: boolean
@@ -25,8 +26,9 @@ export function FormDialog({
   confirmIcon?: ReactNode
   pending?: boolean
   error?: string | null
+  trigger?: ReactElement
   onSubmit: () => void
-  onClose: () => void
+  onOpenChange: (open: boolean) => void
   children: ReactNode
 }) {
   function handleSubmit(event: FormEvent) {
@@ -35,7 +37,14 @@ export function FormDialog({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => !next && !pending && onClose()}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (pending && !next) return
+        onOpenChange(next)
+      }}
+    >
+      {trigger ? <Dialog.Trigger render={trigger} /> : null}
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/40" />
         <Dialog.Viewport className="fixed inset-0 z-50 grid place-items-center p-6">
@@ -59,7 +68,12 @@ export function FormDialog({
               <div className="mt-5 grid flex-1 content-start gap-4">{children}</div>
               {error ? <p className="text-exited mt-3 text-sm">{error}</p> : null}
               <div className="mt-6 flex justify-end gap-2">
-                <Button type="button" icon={<X />} disabled={pending} onClick={onClose}>
+                <Button
+                  type="button"
+                  icon={<X />}
+                  disabled={pending}
+                  onClick={() => onOpenChange(false)}
+                >
                   Cancel
                 </Button>
                 <Button

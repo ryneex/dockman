@@ -4,7 +4,8 @@ import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
-import { useFilter, usePageAction } from "@/components/providers"
+import { ListPage } from "@/components/layouts"
+import { useFilter } from "@/components/providers"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
@@ -26,8 +27,6 @@ export function VolumesPage() {
   const [inspectName, setInspectName] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<VolumeRow | null>(null)
-
-  usePageAction("New", () => setCreateOpen(true), Plus)
 
   const rows = useMemo(
     () =>
@@ -117,9 +116,8 @@ export function VolumesPage() {
   )
 
   return (
-    <>
+    <ListPage action={<CreateVolumeDialog open={createOpen} onOpenChange={setCreateOpen} />}>
       {body}
-      <CreateVolumeDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       <InspectDrawer
         open={Boolean(inspectName)}
         title={inspectName ?? "Inspect volume"}
@@ -137,6 +135,6 @@ export function VolumesPage() {
         onConfirm={() => removeTarget && remove.mutate(removeTarget.name)}
         onClose={() => setRemoveTarget(null)}
       />
-    </>
+    </ListPage>
   )
 }

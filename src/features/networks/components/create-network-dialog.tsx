@@ -2,11 +2,18 @@ import { useQueryClient } from "@tanstack/react-query"
 import { Plus } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { Button } from "@/components/ui/button"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api } from "@/lib/api"
 
-export function CreateNetworkDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CreateNetworkDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const client = useQueryClient()
   const [name, setName] = useState("")
   const [driver, setDriver] = useState("bridge")
@@ -31,7 +38,7 @@ export function CreateNetworkDialog({ open, onClose }: { open: boolean; onClose:
     try {
       await api.networkCreate(name.trim(), driver.trim() || "bridge")
       await client.invalidateQueries({ queryKey: ["networks"] })
-      onClose()
+      onOpenChange(false)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -47,8 +54,13 @@ export function CreateNetworkDialog({ open, onClose }: { open: boolean; onClose:
       confirmIcon={<Plus />}
       pending={pending}
       error={error}
+      trigger={
+        <Button variant="primary" icon={<Plus />}>
+          New
+        </Button>
+      }
       onSubmit={() => void submit()}
-      onClose={onClose}
+      onOpenChange={onOpenChange}
     >
       <Field label="Name">
         <TextInput

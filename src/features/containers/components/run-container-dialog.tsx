@@ -3,6 +3,7 @@ import { Play, Plus } from "lucide-react"
 import { useEffect, useId, useMemo, useState, type KeyboardEvent } from "react"
 
 import { ImageSearchResults } from "@/components/common"
+import { Button } from "@/components/ui/button"
 import { Field, TextArea, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
@@ -15,11 +16,13 @@ import { useImageSearch } from "@/lib/use-image-search"
 export function RunContainerDialog({
   open,
   initialImage = "",
-  onClose,
+  trigger,
+  onOpenChange,
 }: {
   open: boolean
   initialImage?: string
-  onClose: () => void
+  trigger?: boolean
+  onOpenChange: (open: boolean) => void
 }) {
   const images = useImages()
   const client = useQueryClient()
@@ -144,7 +147,7 @@ export function RunContainerDialog({
         start,
       })
       await client.invalidateQueries({ queryKey: ["containers"] })
-      onClose()
+      onOpenChange(false)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -161,8 +164,15 @@ export function RunContainerDialog({
       confirmIcon={start ? <Play /> : <Plus />}
       pending={pending}
       error={error}
+      trigger={
+        trigger ? (
+          <Button variant="primary" icon={<Plus />}>
+            New
+          </Button>
+        ) : undefined
+      }
       onSubmit={() => void submit()}
-      onClose={onClose}
+      onOpenChange={onOpenChange}
     >
       <Field
         label="Image"

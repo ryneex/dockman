@@ -3,6 +3,7 @@ import { Download } from "lucide-react"
 import { useEffect, useId, useState, type KeyboardEvent } from "react"
 
 import { ImageSearchResults } from "@/components/common"
+import { Button } from "@/components/ui/button"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
@@ -10,7 +11,13 @@ import { hubSearchTerm } from "@/lib/hub-search"
 import type { ImageSearchRow } from "@/lib/types"
 import { useImageSearch } from "@/lib/use-image-search"
 
-export function PullImageDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function PullImageDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const client = useQueryClient()
   const listId = useId()
   const [reference, setReference] = useState("")
@@ -77,7 +84,7 @@ export function PullImageDialog({ open, onClose }: { open: boolean; onClose: () 
     try {
       await api.imagePull(ref)
       await client.invalidateQueries({ queryKey: ["images"] })
-      onClose()
+      onOpenChange(false)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -95,8 +102,13 @@ export function PullImageDialog({ open, onClose }: { open: boolean; onClose: () 
       confirmIcon={<Download />}
       pending={pending}
       error={error}
+      trigger={
+        <Button variant="primary" icon={<Download />}>
+          Pull
+        </Button>
+      }
       onSubmit={() => void submit()}
-      onClose={onClose}
+      onOpenChange={onOpenChange}
     >
       <Field label="Image" hint="Pick a result or pull any exact name:tag.">
         <TextInput

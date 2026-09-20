@@ -4,7 +4,8 @@ import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { CopyId, InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
-import { useFilter, usePageAction } from "@/components/providers"
+import { ListPage } from "@/components/layouts"
+import { useFilter } from "@/components/providers"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
@@ -26,8 +27,6 @@ export function NetworksPage() {
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<NetworkRow | null>(null)
-
-  usePageAction("New", () => setCreateOpen(true), Plus)
 
   const rows = useMemo(
     () =>
@@ -129,9 +128,8 @@ export function NetworksPage() {
   )
 
   return (
-    <>
+    <ListPage action={<CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />}>
       {body}
-      <CreateNetworkDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       <InspectDrawer
         open={Boolean(inspectId)}
         title={selected?.name ?? "Inspect network"}
@@ -149,6 +147,6 @@ export function NetworksPage() {
         onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
         onClose={() => setRemoveTarget(null)}
       />
-    </>
+    </ListPage>
   )
 }
