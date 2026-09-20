@@ -19,13 +19,11 @@ makepkg -si
 
 That is the same set as `webkit2gtk-4.1`, `base-devel`, `curl`, `wget`, `file`, `openssl`, `appmenu-gtk-module`, `libappindicator-gtk3`, `librsvg`, and `xdotool`. Run `sudo pacman -Syu` first if you want a full upgrade.
 
-Remove them together (unused deps only):
-
 ```bash
 sudo pacman -Rns dockman-devel
 ```
 
-Then add your user to the `docker` group and log out and back in:
+Add your user to the `docker` group and log out and back in:
 
 ```bash
 sudo usermod -aG docker "$USER"
@@ -36,6 +34,20 @@ sudo usermod -aG docker "$USER"
 ```bash
 pnpm install
 pnpm tauri dev
+```
+
+## Install (Arch)
+
+Builds a `pacman` package from this checkout and installs it. `makepkg` pulls `webkit2gtk-4.1` and the other runtime deps from the repos:
+
+```bash
+pnpm tauri:build
+```
+
+Same as `cd devel && DOCKMAN_PKG=app makepkg -si`. The package is `dockman`. Runtime WebKit/GTK come from the repos (and from `dockman-devel` if you already installed that).
+
+```bash
+sudo pacman -Rns dockman
 ```
 
 ## Features (v1)

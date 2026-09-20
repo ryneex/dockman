@@ -22,7 +22,8 @@ dist-ssr
 *.sln
 *.sw?
 
-# makepkg leftovers for dockman-devel
+# makepkg leftovers
 devel/pkg/
 devel/src/
 devel/*.pkg.tar*
+devel/.cache/

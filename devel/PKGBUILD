@@ -1,54 +1,123 @@
 # Maintainer: Dockman contributors
-# Metapackage for Tauri + Dockman build deps on Arch.
+#
+# Dev prerequisites (no compile):
 #   cd devel && makepkg -si
 #   sudo pacman -Rns dockman-devel
+#
+# App:
+#   cd devel && DOCKMAN_PKG=app makepkg -si
 
-pkgname=dockman-devel
-pkgver=1.0.0
-pkgrel=1
-pkgdesc="Metapackage: Arch packages needed to build and run Dockman (Tauri)"
-arch=('any')
-url="https://github.com/sajid/docker-desktop-linux"
+url="https://github.com/ryneex/docker-desktop-linux"
 license=('MIT')
-depends=(
-  # Tauri Linux prerequisites
-  webkit2gtk-4.1
-  curl
-  wget
-  file
-  openssl
-  appmenu-gtk-module
-  libappindicator-gtk3
-  librsvg
-  xdotool
-  # base-devel group (groups cannot be listed in depends)
-  autoconf
-  automake
-  binutils
-  bison
-  debugedit
-  fakeroot
-  findutils
-  flex
-  gawk
-  gcc
-  gettext
-  grep
-  groff
-  gzip
-  libtool
-  m4
-  make
-  patch
-  pkgconf
-  sed
-  texinfo
-  which
-)
 
-package() {
-  install -d "$pkgdir/usr/share/doc/$pkgname"
-  cat >"$pkgdir/usr/share/doc/$pkgname/README" <<'EOF'
+if [[ "${DOCKMAN_PKG:-devel}" == app ]]; then
+  pkgname=dockman
+  pkgver=0.1.0
+  pkgrel=3
+  pkgdesc="Linux desktop app for controlling a local Docker Engine"
+  arch=('x86_64')
+  depends=(
+    webkit2gtk-4.1
+    gtk3
+    libappindicator-gtk3
+    librsvg
+    openssl
+    hicolor-icon-theme
+  )
+  makedepends=(
+    rust
+    cargo
+    nodejs
+    pnpm
+    pkgconf
+    librsvg
+  )
+  options=('!debug' '!lto')
+
+  build() {
+    cd "$startdir/.."
+    pnpm install --frozen-lockfile
+    pnpm exec tauri build --no-bundle
+  }
+
+  package() {
+    local repo="$startdir/.."
+
+    install -Dm755 "$repo/src-tauri/target/release/dockman" "$pkgdir/usr/bin/dockman"
+
+    # Plasma looks up icons by desktop-file id (com.dockman.app), not the binary name.
+    local svg="$repo/src-tauri/app-icon.svg"
+    local icon_id=com.dockman.app
+    local size
+    for size in 32 48 64 128 256 512; do
+      install -d "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
+      rsvg-convert -w "$size" -h "$size" -o \
+        "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/${icon_id}.png" "$svg"
+      ln -s "${icon_id}.png" \
+        "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/dockman.png"
+    done
+    install -Dm644 "$svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/${icon_id}.svg"
+    ln -s "${icon_id}.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/dockman.svg"
+    install -Dm644 "$pkgdir/usr/share/icons/hicolor/512x512/apps/${icon_id}.png" \
+      "$pkgdir/usr/share/pixmaps/${icon_id}.png"
+
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/${icon_id}.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Dockman
+Comment=Control a local Docker Engine
+Exec=dockman
+Icon=${icon_id}
+Terminal=false
+Categories=Development;
+StartupWMClass=${icon_id}
+EOF
+  }
+else
+  pkgname=dockman-devel
+  pkgver=1.0.0
+  pkgrel=1
+  pkgdesc="Metapackage: Arch packages needed to build and run Dockman (Tauri)"
+  arch=('any')
+  depends=(
+    # Tauri Linux prerequisites
+    webkit2gtk-4.1
+    curl
+    wget
+    file
+    openssl
+    appmenu-gtk-module
+    libappindicator-gtk3
+    librsvg
+    xdotool
+    # base-devel group (groups cannot be listed in depends)
+    autoconf
+    automake
+    binutils
+    bison
+    debugedit
+    fakeroot
+    findutils
+    flex
+    gawk
+    gcc
+    gettext
+    grep
+    groff
+    gzip
+    libtool
+    m4
+    make
+    patch
+    pkgconf
+    sed
+    texinfo
+    which
+  )
+
+  package() {
+    install -d "$pkgdir/usr/share/doc/$pkgname"
+    cat >"$pkgdir/usr/share/doc/$pkgname/README" <<'EOF'
 dockman-devel pulls in the Arch packages needed to build Dockman with Tauri.
 
 Install:  makepkg -si
@@ -57,4 +126,5 @@ Remove:   sudo pacman -Rns dockman-devel
 pacman -Rns drops this metapackage and any of its dependencies that nothing
 else still needs. Core tools such as gcc stay if another package requires them.
 EOF
-}
+  }
+fi
