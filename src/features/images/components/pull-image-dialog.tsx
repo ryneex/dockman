@@ -1,12 +1,15 @@
-import { useQueryClient } from "@tanstack/react-query"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Download } from "lucide-react"
 import { useEffect, useId, useState, type KeyboardEvent } from "react"
+import { Controller, useForm, useWatch } from "react-hook-form"
 
 import { ImageSearchResults } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
+import { PullImage, type PullImageValues } from "@/lib/create-form"
 import { hubSearchTerm } from "@/lib/hub-search"
 import type { ImageSearchRow } from "@/lib/types"
 import { useImageSearch } from "@/lib/use-image-search"
@@ -20,36 +23,57 @@ export function PullImageDialog({
 }) {
   const client = useQueryClient()
   const listId = useId()
-  const [reference, setReference] = useState("")
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string[]>([])
   const [pickedTerm, setPickedTerm] = useState<string | null>(null)
   const [active, setActive] = useState(-1)
 
+  const form = useForm({
+    resolver: zodResolver(PullImage),
+    defaultValues: { reference: "" },
+  })
+  const reference = useWatch({ control: form.control, name: "reference" })
+
+  const { mutate, isPending, error, reset } = useMutation({
+    mutationFn: async ({ reference }: PullImageValues) => {
+      const unlisten = await listenImagePull((chunk) => {
+        setProgress((current) => {
+          const next = current.concat(chunk.line)
+          return next.length > 80 ? next.slice(-80) : next
+        })
+      })
+      try {
+        await api.imagePull(reference)
+      } finally {
+        unlisten()
+      }
+    },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ["images"] })
+      onOpenChange(false)
+    },
+  })
+
   const term = hubSearchTerm(reference)
-  const showResults = open && !pending && term.length >= 2 && pickedTerm !== term
+  const showResults = open && !isPending && term.length >= 2 && pickedTerm !== term
   const { results, searching, searchError } = useImageSearch(term, showResults)
 
   useEffect(() => {
     if (!open) return
-    setReference("")
-    setPending(false)
-    setError(null)
+    form.reset({ reference: "" })
     setProgress([])
     setPickedTerm(null)
     setActive(-1)
-  }, [open])
+    reset()
+  }, [form, open, reset])
 
   useEffect(() => {
     setActive(-1)
   }, [results, showResults])
 
   function selectResult(row: ImageSearchRow) {
-    setReference(row.name)
+    form.setValue("reference", row.name, { shouldValidate: true })
     setPickedTerm(row.name)
     setActive(-1)
-    setError(null)
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -66,33 +90,6 @@ export function PullImageDialog({
     }
   }
 
-  async function submit() {
-    const ref = reference.trim()
-    if (!ref) {
-      setError("Image reference is required")
-      return
-    }
-    setPending(true)
-    setError(null)
-    setProgress([])
-    const unlisten = await listenImagePull((chunk) => {
-      setProgress((current) => {
-        const next = current.concat(chunk.line)
-        return next.length > 80 ? next.slice(-80) : next
-      })
-    })
-    try {
-      await api.imagePull(ref)
-      await client.invalidateQueries({ queryKey: ["images"] })
-      onOpenChange(false)
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      unlisten()
-      setPending(false)
-    }
-  }
-
   return (
     <FormDialog
       open={open}
@@ -100,32 +97,41 @@ export function PullImageDialog({
       description="Search Docker Hub or type a name:tag. Tag defaults to latest."
       confirmLabel="Pull"
       confirmIcon={<Download />}
-      pending={pending}
-      error={error}
+      pending={isPending}
+      error={error ? String(error) : null}
       trigger={
         <Button variant="primary" icon={<Download />}>
           Pull
         </Button>
       }
-      onSubmit={() => void submit()}
+      onSubmit={form.handleSubmit((values) => mutate(values))}
       onOpenChange={onOpenChange}
     >
-      <Field label="Image" hint="Pick a result or pull any exact name:tag.">
-        <TextInput
-          value={reference}
-          onChange={(event) => setReference(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="nginx:latest"
-          autoFocus
-          required
-          role="combobox"
-          aria-expanded={showResults}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </Field>
+      <Controller
+        name="reference"
+        control={form.control}
+        render={({ field, fieldState }) => (
+          <Field
+            label="Image"
+            hint="Pick a result or pull any exact name:tag."
+            errors={[fieldState.error]}
+          >
+            <TextInput
+              {...field}
+              onKeyDown={onKeyDown}
+              placeholder="nginx:latest"
+              autoFocus
+              role="combobox"
+              aria-expanded={showResults}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-invalid={fieldState.invalid}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+        )}
+      />
       {showResults ? (
         <ImageSearchResults
           listId={listId}

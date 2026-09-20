@@ -1,11 +1,14 @@
-import { useQueryClient } from "@tanstack/react-query"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Plus } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
+import { Controller, useForm } from "react-hook-form"
 
 import { Button } from "@/components/ui/button"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api } from "@/lib/api"
+import { CreateVolume, type CreateVolumeValues } from "@/lib/create-form"
 
 export function CreateVolumeDialog({
   open,
@@ -15,36 +18,26 @@ export function CreateVolumeDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const client = useQueryClient()
-  const [name, setName] = useState("")
-  const [driver, setDriver] = useState("local")
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const form = useForm({
+    resolver: zodResolver(CreateVolume),
+    defaultValues: { name: "", driver: "local" },
+  })
+
+  const { mutate, isPending, error, reset } = useMutation({
+    mutationFn: async ({ name, driver }: CreateVolumeValues) => {
+      await api.volumeCreate(name, driver)
+    },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ["volumes"] })
+      onOpenChange(false)
+    },
+  })
 
   useEffect(() => {
     if (!open) return
-    setName("")
-    setDriver("local")
-    setPending(false)
-    setError(null)
-  }, [open])
-
-  async function submit() {
-    if (!name.trim()) {
-      setError("Volume name is required")
-      return
-    }
-    setPending(true)
-    setError(null)
-    try {
-      await api.volumeCreate(name.trim(), driver.trim() || "local")
-      await client.invalidateQueries({ queryKey: ["volumes"] })
-      onOpenChange(false)
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      setPending(false)
-    }
-  }
+    form.reset({ name: "", driver: "local" })
+    reset()
+  }, [form, open, reset])
 
   return (
     <FormDialog
@@ -52,31 +45,34 @@ export function CreateVolumeDialog({
       title="Create volume"
       confirmLabel="Create"
       confirmIcon={<Plus />}
-      pending={pending}
-      error={error}
+      pending={isPending}
+      error={error ? String(error) : null}
       trigger={
         <Button variant="primary" icon={<Plus />}>
           New
         </Button>
       }
-      onSubmit={() => void submit()}
+      onSubmit={form.handleSubmit((values) => mutate(values))}
       onOpenChange={onOpenChange}
     >
-      <Field label="Name">
-        <TextInput
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          autoFocus
-          required
-        />
-      </Field>
-      <Field label="Driver">
-        <TextInput
-          value={driver}
-          onChange={(event) => setDriver(event.target.value)}
-          placeholder="local"
-        />
-      </Field>
+      <Controller
+        name="name"
+        control={form.control}
+        render={({ field, fieldState }) => (
+          <Field label="Name" errors={[fieldState.error]}>
+            <TextInput {...field} autoFocus aria-invalid={fieldState.invalid} />
+          </Field>
+        )}
+      />
+      <Controller
+        name="driver"
+        control={form.control}
+        render={({ field, fieldState }) => (
+          <Field label="Driver" errors={[fieldState.error]}>
+            <TextInput {...field} placeholder="local" aria-invalid={fieldState.invalid} />
+          </Field>
+        )}
+      />
     </FormDialog>
   )
 }

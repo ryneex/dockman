@@ -5,7 +5,11 @@ import { SearchField } from "@/components/ui/search-field"
 
 function isEditable(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
-  return Boolean(target.closest("input, textarea, [contenteditable='true']"))
+  return Boolean(
+    target.closest(
+      "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='listbox'], [role='option']",
+    ),
+  )
 }
 
 export function Toolbar({ children }: { children?: ReactNode }) {
@@ -26,7 +30,7 @@ export function Toolbar({ children }: { children?: ReactNode }) {
   return (
     <div className="border-border flex h-12 shrink-0 items-center gap-2.5 border-b px-4">
       <SearchField ref={inputRef} value={query} onChange={setQuery} />
-      {children}
+      {children ? <div className="flex shrink-0 items-center gap-2">{children}</div> : null}
     </div>
   )
 }

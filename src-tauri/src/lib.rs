@@ -11,6 +11,9 @@ pub fn run() {
             docker::container_start,
             docker::container_stop,
             docker::container_restart,
+            docker::container_pause,
+            docker::container_unpause,
+            docker::container_rename,
             docker::container_remove,
             docker::container_inspect,
             docker::container_logs,
@@ -27,10 +30,14 @@ pub fn run() {
             docker::image_pull,
             docker::image_search,
             docker::container_create,
+            docker::containers_prune,
+            docker::images_prune,
+            docker::volumes_prune,
             docker::volume_create,
             docker::network_create,
             docker::container_fs_list,
             docker::container_fs_read,
+            docker::container_fs_write,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

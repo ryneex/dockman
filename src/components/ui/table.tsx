@@ -19,13 +19,13 @@ export function Table({ children, cols }: { children: ReactNode; cols?: string[]
   )
 }
 
-export function THead({ columns }: { columns: string[] }) {
+export function THead({ columns }: { columns: ReactNode[] }) {
   return (
     <thead className="bg-canvas/90 sticky top-0 z-10 backdrop-blur">
       <tr className="border-border border-b">
-        {columns.map((column) => (
+        {columns.map((column, index) => (
           <th
-            key={column}
+            key={index}
             className={
               column ? "text-faint px-3 py-2 text-sm font-medium first:pl-4 last:pr-4" : "w-0 p-0"
             }
@@ -64,15 +64,18 @@ export function TCell({
   children,
   mono,
   className,
+  truncate = true,
 }: {
   children: ReactNode
   mono?: boolean
   className?: string
+  truncate?: boolean
 }) {
   return (
     <td
       className={cn(
-        "text-ink truncate px-3 first:pl-4 last:pr-4",
+        "text-ink px-3 first:pl-4 last:pr-4",
+        truncate && "truncate",
         mono && "text-muted font-mono text-sm",
         className,
       )}

@@ -29,6 +29,15 @@ export function useImages() {
   })
 }
 
+export function useImageInspect(id: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["image-inspect", id],
+    queryFn: () => api.imageInspect(id!),
+    enabled: Boolean(id) && enabled,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
 export function useVolumes() {
   return useQuery({
     queryKey: ["volumes"],

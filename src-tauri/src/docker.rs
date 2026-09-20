@@ -1,23 +1,28 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 
+use bollard::body_full;
+use bollard::exec::StartExecResults;
 use bollard::models::{
-    ContainerCreateBody, HostConfig, NetworkCreateRequest, PortBinding, VolumeCreateRequest,
+    ContainerCreateBody, ExecConfig, HostConfig, NetworkCreateRequest, PortBinding, RestartPolicy,
+    RestartPolicyNameEnum, VolumeCreateRequest,
 };
 use bollard::query_parameters::{
     ContainerArchiveInfoOptionsBuilder, CreateContainerOptionsBuilder, CreateImageOptionsBuilder,
-    DownloadFromContainerOptionsBuilder, InspectNetworkOptionsBuilder, ListContainersOptionsBuilder,
-    ListImagesOptionsBuilder, ListNetworksOptionsBuilder, ListVolumesOptionsBuilder,
-    LogsOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
-    RemoveVolumeOptionsBuilder, RestartContainerOptionsBuilder, SearchImagesOptionsBuilder,
-    StartContainerOptions, StopContainerOptionsBuilder,
+    DownloadFromContainerOptionsBuilder, InspectNetworkOptionsBuilder,
+    ListContainersOptionsBuilder, ListImagesOptionsBuilder, ListNetworksOptionsBuilder,
+    ListVolumesOptionsBuilder, LogsOptionsBuilder, PruneImagesOptionsBuilder,
+    RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder,
+    RenameContainerOptionsBuilder, RestartContainerOptionsBuilder, SearchImagesOptionsBuilder,
+    StartContainerOptions, StopContainerOptionsBuilder, UploadToContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::StreamExt;
 use serde::Serialize;
-use tar::Archive;
+use tar::{Archive, Builder, Header};
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Default)]
@@ -63,6 +68,7 @@ pub struct ImageRow {
     pub tags: Vec<String>,
     pub size: i64,
     pub created: i64,
+    pub dangling: bool,
     pub used_by: Vec<UsageRef>,
 }
 
@@ -188,7 +194,9 @@ struct ResourceUsage {
 
 async fn resource_usage(docker: &Docker) -> Result<ResourceUsage, String> {
     let containers = docker
-        .list_containers(Some(ListContainersOptionsBuilder::default().all(true).build()))
+        .list_containers(Some(
+            ListContainersOptionsBuilder::default().all(true).build(),
+        ))
         .await
         .map_err(map_err)?;
 
@@ -269,7 +277,9 @@ pub async fn engine_info() -> Result<EngineInfo, String> {
 pub async fn list_containers() -> Result<Vec<ContainerRow>, String> {
     let docker = docker()?;
     let containers = docker
-        .list_containers(Some(ListContainersOptionsBuilder::default().all(true).build()))
+        .list_containers(Some(
+            ListContainersOptionsBuilder::default().all(true).build(),
+        ))
         .await
         .map_err(map_err)?;
 
@@ -351,6 +361,31 @@ pub async fn container_restart(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn container_pause(id: String) -> Result<(), String> {
+    docker()?.pause_container(&id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn container_unpause(id: String) -> Result<(), String> {
+    docker()?.unpause_container(&id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn container_rename(id: String, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Container name is required".into());
+    }
+    docker()?
+        .rename_container(
+            &id,
+            RenameContainerOptionsBuilder::default().name(&name).build(),
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
 pub async fn container_remove(id: String) -> Result<(), String> {
     docker()?
         .remove_container(
@@ -376,7 +411,11 @@ pub async fn container_inspect(id: String) -> Result<serde_json::Value, String> 
 }
 
 #[tauri::command]
-pub async fn container_logs(app: AppHandle, hub: State<'_, LogHub>, id: String) -> Result<(), String> {
+pub async fn container_logs(
+    app: AppHandle,
+    hub: State<'_, LogHub>,
+    id: String,
+) -> Result<(), String> {
     let docker = docker()?;
     let (abort_handle, abort_reg) = AbortHandle::new_pair();
     {
@@ -393,7 +432,7 @@ pub async fn container_logs(app: AppHandle, hub: State<'_, LogHub>, id: String) 
             .stderr(true)
             .follow(true)
             .tail("200")
-            .timestamps(false)
+            .timestamps(true)
             .build();
         let stream = docker.logs(&stream_id, Some(options));
         let mut stream = Abortable::new(stream, abort_reg);
@@ -448,11 +487,13 @@ pub async fn list_images() -> Result<Vec<ImageRow>, String> {
             let mut keys: Vec<&str> = aliases.iter().map(String::as_str).collect();
             keys.extend(tags.iter().map(String::as_str));
             let used_by = used_by_for(&usage.images, &keys);
+            let dangling = tags.is_empty();
             ImageRow {
                 id: image.id,
                 tags,
                 size: image.size,
                 created: image.created,
+                dangling,
                 used_by,
             }
         })
@@ -571,7 +612,11 @@ pub async fn network_inspect(id: String) -> Result<serde_json::Value, String> {
     let inspect = docker()?
         .inspect_network(
             &id,
-            Some(InspectNetworkOptionsBuilder::default().verbose(true).build()),
+            Some(
+                InspectNetworkOptionsBuilder::default()
+                    .verbose(true)
+                    .build(),
+            ),
         )
         .await
         .map_err(map_err)?;
@@ -603,8 +648,7 @@ pub struct FsFile {
     pub text: String,
 }
 
-const MAX_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_FILE_BYTES: u64 = 256 * 1024;
+const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const ROOT_CANDIDATES: &[&str] = &[
     "app", "bin", "boot", "data", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt",
     "proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
@@ -638,6 +682,102 @@ fn parse_port_line(line: &str) -> Result<(String, String), String> {
     } else {
         Err(format!("Invalid port mapping: {line}"))
     }
+}
+
+fn parse_mount_line(line: &str) -> Result<String, String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Err("Mount is required".into());
+    }
+    let (rest, mode) = if let Some(stripped) = line.strip_suffix(":ro") {
+        (stripped, Some("ro"))
+    } else if let Some(stripped) = line.strip_suffix(":rw") {
+        (stripped, Some("rw"))
+    } else {
+        (line, None)
+    };
+    let Some((source, target)) = rest.rsplit_once(':') else {
+        return Err(format!("Invalid mount: {line}"));
+    };
+    let source = source.trim();
+    let target = target.trim();
+    if source.is_empty() {
+        return Err(format!("Invalid mount: {line}"));
+    }
+    if !target.starts_with('/') {
+        return Err(format!("Container path must be absolute: {line}"));
+    }
+    if source.contains('/') && !source.starts_with('/') {
+        return Err(format!("Invalid mount: {line}"));
+    }
+    Ok(match mode {
+        Some(mode) => format!("{source}:{target}:{mode}"),
+        None => format!("{source}:{target}"),
+    })
+}
+
+fn parse_restart(value: &str) -> Result<Option<RestartPolicy>, String> {
+    let value = value.trim();
+    if value.is_empty() || value == "no" {
+        return Ok(None);
+    }
+    let name = match value {
+        "on-failure" => RestartPolicyNameEnum::ON_FAILURE,
+        "always" => RestartPolicyNameEnum::ALWAYS,
+        "unless-stopped" => RestartPolicyNameEnum::UNLESS_STOPPED,
+        _ => return Err(format!("Invalid restart policy: {value}")),
+    };
+    Ok(Some(RestartPolicy {
+        name: Some(name),
+        maximum_retry_count: None,
+    }))
+}
+
+fn nonempty_args(values: Vec<String>) -> Option<Vec<String>> {
+    let args: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if args.is_empty() {
+        None
+    } else {
+        Some(args)
+    }
+}
+
+fn parent_and_name(path: &str) -> Result<(String, String), String> {
+    let path = sanitize_path(path)?;
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        return Err("not_a_file".into());
+    };
+    if name.is_empty() {
+        return Err("not_a_file".into());
+    }
+    Ok((
+        if parent.is_empty() {
+            "/".into()
+        } else {
+            parent.to_string()
+        },
+        name.to_string(),
+    ))
+}
+
+fn pack_text_file(name: &str, text: &str) -> Result<Vec<u8>, String> {
+    let bytes = text.as_bytes();
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("too_large".into());
+    }
+    let mut header = Header::new_gnu();
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let mut builder = Builder::new(Vec::new());
+    builder
+        .append_data(&mut header, name, bytes)
+        .map_err(|e| e.to_string())?;
+    builder.into_inner().map_err(|e| e.to_string())
 }
 
 fn sanitize_path(path: &str) -> Result<String, String> {
@@ -690,24 +830,68 @@ fn first_child(entry: &str, requested: &str) -> Option<(String, bool)> {
     Some((child.to_string(), nested))
 }
 
-async fn download_archive(docker: &Docker, id: &str, path: &str) -> Result<Vec<u8>, String> {
+async fn download_archive(
+    docker: &Docker,
+    id: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
     let mut stream = docker.download_from_container(
         id,
-        Some(DownloadFromContainerOptionsBuilder::default().path(path).build()),
+        Some(
+            DownloadFromContainerOptionsBuilder::default()
+                .path(path)
+                .build(),
+        ),
     );
     let mut buf = Vec::new();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(map_err)?;
-        if buf.len().saturating_add(bytes.len()) > MAX_ARCHIVE_BYTES {
-            return Err("Path is too large to read in the app. Open a narrower directory.".into());
+        if buf.len().saturating_add(bytes.len()) > max_bytes {
+            return Err("too_large".into());
         }
         buf.extend_from_slice(&bytes);
     }
     Ok(buf)
 }
 
-fn list_tar_children(buf: &[u8], requested: &str) -> Result<Vec<FsEntry>, String> {
-    let mut archive = Archive::new(Cursor::new(buf));
+struct ChannelReader {
+    rx: Receiver<Result<Vec<u8>, String>>,
+    leftover: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.pos < self.leftover.len() {
+                let n = (self.leftover.len() - self.pos).min(buf.len());
+                buf[..n].copy_from_slice(&self.leftover[self.pos..self.pos + n]);
+                self.pos += n;
+                if self.pos >= self.leftover.len() {
+                    self.leftover.clear();
+                    self.pos = 0;
+                }
+                return Ok(n);
+            }
+            match self.rx.recv() {
+                Ok(Ok(bytes)) if bytes.is_empty() => continue,
+                Ok(Ok(bytes)) => {
+                    self.leftover = bytes;
+                    self.pos = 0;
+                }
+                Ok(Err(err)) => return Err(std::io::Error::other(err)),
+                Err(_) => return Ok(0),
+            }
+        }
+    }
+}
+
+fn list_tar_children(reader: impl Read, requested: &str) -> Result<Vec<FsEntry>, String> {
+    let mut archive = Archive::new(reader);
     let mut by_name: HashMap<String, FsEntry> = HashMap::new();
 
     for entry in archive.entries().map_err(|e| e.to_string())? {
@@ -725,6 +909,11 @@ fn list_tar_children(buf: &[u8], requested: &str) -> Result<Vec<FsEntry>, String
         } else {
             "file"
         };
+        let size = if kind == "file" {
+            header.size().unwrap_or(0)
+        } else {
+            0
+        };
         let child_path = if requested == "/" {
             format!("/{name}")
         } else {
@@ -735,54 +924,221 @@ fn list_tar_children(buf: &[u8], requested: &str) -> Result<Vec<FsEntry>, String
             .and_modify(|existing| {
                 if kind == "dir" {
                     existing.kind = "dir".into();
+                    existing.size = 0;
                 }
             })
             .or_insert(FsEntry {
                 name,
                 path: child_path,
                 kind: kind.into(),
-                size: header.size().unwrap_or(0),
+                size,
             });
     }
 
-    let mut rows: Vec<FsEntry> = by_name.into_values().collect();
-    rows.sort_by(|a, b| {
-        (a.kind != "dir")
-            .cmp(&(b.kind != "dir"))
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    Ok(rows)
+    Ok(sort_fs_entries(by_name.into_values().collect()))
+}
+
+fn tar_entry_name(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_string()
+}
+
+fn read_capped(entry: &mut impl Read) -> Result<Vec<u8>, String> {
+    let mut data = Vec::new();
+    entry
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| e.to_string())?;
+    if data.len() as u64 > MAX_FILE_BYTES {
+        return Err("too_large".into());
+    }
+    Ok(data)
 }
 
 fn read_tar_file(buf: &[u8], requested: &str) -> Result<FsFile, String> {
     let mut archive = Archive::new(Cursor::new(buf));
     let req = requested.trim_start_matches('/');
     let base = requested.rsplit('/').next().unwrap_or(req);
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path().map_err(|e| e.to_string())?;
-        let raw = path.to_string_lossy().replace('\\', "/");
-        let trimmed = raw.trim_matches('/');
-        if trimmed != req && trimmed != base {
+        if !entry.header().entry_type().is_file() {
             continue;
         }
-        if !entry.header().entry_type().is_file() {
+        let path = entry.path().map_err(|e| e.to_string())?;
+        let trimmed = tar_entry_name(&path.to_string_lossy());
+        let data = read_capped(&mut entry)?;
+        files.push((trimmed, data));
+    }
+
+    let data = if let Some((_, data)) = files.iter().find(|(name, _)| name == req) {
+        data.clone()
+    } else if files.len() == 1 {
+        files.remove(0).1
+    } else if let Some((_, data)) = files.iter().find(|(name, _)| name == base) {
+        if files.iter().filter(|(name, _)| name == base).count() == 1 {
+            data.clone()
+        } else {
             return Err("not_a_file".into());
         }
-        let size = entry.header().size().unwrap_or(0);
-        if size > MAX_FILE_BYTES {
-            return Err("too_large".into());
+    } else {
+        return Err("not_a_file".into());
+    };
+
+    let text = String::from_utf8(data).map_err(|_| "binary".to_string())?;
+    Ok(FsFile {
+        path: requested.to_string(),
+        text,
+    })
+}
+
+const LIST_DIR_SCRIPT: &str = r#"
+path=$1
+cd -- "$path" || exit 1
+for name in .* *; do
+  [ "$name" = "." ] || [ "$name" = ".." ] && continue
+  if [ ! -e "$name" ] && [ ! -L "$name" ]; then
+    continue
+  fi
+  if [ -L "$name" ]; then
+    k=symlink
+    s=0
+  elif [ -d "$name" ]; then
+    k=dir
+    s=0
+  else
+    k=file
+    s=$(stat -c %s -- "$name" 2>/dev/null || echo 0)
+  fi
+  printf '%s\t%s\t%s\n' "$k" "$s" "$name"
+done
+"#;
+
+fn sort_fs_entries(mut rows: Vec<FsEntry>) -> Vec<FsEntry> {
+    rows.sort_by(|a, b| {
+        (a.kind != "dir")
+            .cmp(&(b.kind != "dir"))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    rows
+}
+
+fn parse_dir_list(text: &str, parent: &str) -> Vec<FsEntry> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let Some((kind, rest)) = line.split_once('\t') else {
+            continue;
+        };
+        let Some((size, name)) = rest.split_once('\t') else {
+            continue;
+        };
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
         }
-        let mut data = Vec::new();
-        entry.read_to_end(&mut data).map_err(|e| e.to_string())?;
-        let text = String::from_utf8(data).map_err(|_| "binary".to_string())?;
-        return Ok(FsFile {
-            path: requested.to_string(),
-            text,
+        let path = if parent == "/" {
+            format!("/{name}")
+        } else {
+            format!("{parent}/{name}")
+        };
+        rows.push(FsEntry {
+            name: name.to_string(),
+            path,
+            kind: kind.to_string(),
+            size: size.parse().unwrap_or(0),
         });
     }
-    Err("File not found".into())
+    sort_fs_entries(rows)
+}
+
+async fn exec_stdout(docker: &Docker, id: &str, cmd: Vec<String>) -> Result<String, String> {
+    let exec = docker
+        .create_exec(
+            id,
+            ExecConfig {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(cmd),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(map_err)?
+        .id;
+    let StartExecResults::Attached { mut output, .. } =
+        docker.start_exec(&exec, None).await.map_err(map_err)?
+    else {
+        return Err("Could not attach to exec".into());
+    };
+    let mut out = String::new();
+    while let Some(item) = output.next().await {
+        out.push_str(&item.map_err(map_err)?.to_string());
+    }
+    let inspect = docker.inspect_exec(&exec).await.map_err(map_err)?;
+    if inspect.exit_code.unwrap_or(0) != 0 {
+        return Err(if out.trim().is_empty() {
+            "Could not list this folder".into()
+        } else {
+            out.trim().to_string()
+        });
+    }
+    Ok(out)
+}
+
+async fn list_via_archive(docker: &Docker, id: &str, path: &str) -> Result<Vec<FsEntry>, String> {
+    let mut stream = docker.download_from_container(
+        id,
+        Some(
+            DownloadFromContainerOptionsBuilder::default()
+                .path(path)
+                .build(),
+        ),
+    );
+    let (tx, rx) = mpsc::sync_channel(8);
+    let requested = path.to_string();
+    let worker = std::thread::spawn(move || {
+        list_tar_children(
+            ChannelReader {
+                rx,
+                leftover: Vec::new(),
+                pos: 0,
+            },
+            &requested,
+        )
+    });
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                if tx.send(Ok(bytes.to_vec())).is_err() {
+                    break;
+                }
+            }
+            Err(err) => {
+                let _ = tx.send(Err(map_err(err)));
+                break;
+            }
+        }
+    }
+    drop(tx);
+    worker.join().unwrap_or_else(|_| Err("Could not list this folder".into()))
+}
+
+async fn list_via_exec(docker: &Docker, id: &str, path: &str) -> Result<Vec<FsEntry>, String> {
+    let text = exec_stdout(
+        docker,
+        id,
+        vec![
+            "sh".into(),
+            "-c".into(),
+            LIST_DIR_SCRIPT.to_string(),
+            "lsdir".into(),
+            path.to_string(),
+        ],
+    )
+    .await?;
+    if text.contains("can't cd") || text.contains("No such file") {
+        return Err(text.trim().to_string());
+    }
+    Ok(parse_dir_list(&text, path))
 }
 
 async fn list_root(docker: &Docker, id: &str) -> Result<Vec<FsEntry>, String> {
@@ -792,7 +1148,11 @@ async fn list_root(docker: &Docker, id: &str) -> Result<Vec<FsEntry>, String> {
         if docker
             .get_container_archive_info(
                 id,
-                Some(ContainerArchiveInfoOptionsBuilder::default().path(&path).build()),
+                Some(
+                    ContainerArchiveInfoOptionsBuilder::default()
+                        .path(&path)
+                        .build(),
+                ),
             )
             .await
             .is_ok()
@@ -854,7 +1214,10 @@ fn hub_search_term(raw: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    let without_digest = trimmed.split_once('@').map(|(name, _)| name).unwrap_or(trimmed);
+    let without_digest = trimmed
+        .split_once('@')
+        .map(|(name, _)| name)
+        .unwrap_or(trimmed);
     if let Some((name, tag)) = without_digest.rsplit_once(':') {
         if !name.is_empty() && !tag.contains('/') {
             return name.to_string();
@@ -894,7 +1257,10 @@ pub async fn image_search(term: String) -> Result<Vec<ImageSearchRow>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::hub_search_term;
+    use super::{
+        first_child, hub_search_term, list_tar_children, parent_and_name, parse_dir_list,
+        parse_mount_line, parse_restart, read_tar_file,
+    };
 
     #[test]
     fn hub_search_term_strips_tag_and_digest() {
@@ -906,6 +1272,153 @@ mod tests {
         assert_eq!(hub_search_term("a"), "a");
         assert_eq!(hub_search_term(""), "");
     }
+
+    #[test]
+    fn parse_mount_line_accepts_volume_bind_and_mode() {
+        assert_eq!(
+            parse_mount_line("data:/var/lib/data").unwrap(),
+            "data:/var/lib/data"
+        );
+        assert_eq!(
+            parse_mount_line("/tmp/app:/app:ro").unwrap(),
+            "/tmp/app:/app:ro"
+        );
+        assert!(parse_mount_line("data").is_err());
+        assert!(parse_mount_line("data:relative").is_err());
+        assert!(parse_mount_line("not/a/volume:/app").is_err());
+    }
+
+    #[test]
+    fn parse_restart_skips_default() {
+        assert!(parse_restart("no").unwrap().is_none());
+        assert!(parse_restart("unless-stopped").unwrap().is_some());
+        assert!(parse_restart("sometimes").is_err());
+    }
+
+    #[test]
+    fn parent_and_name_splits_absolute_files() {
+        assert_eq!(
+            parent_and_name("/etc/hosts").unwrap(),
+            ("/etc".into(), "hosts".into())
+        );
+        assert_eq!(parent_and_name("/foo").unwrap(), ("/".into(), "foo".into()));
+        assert!(parent_and_name("/").is_err());
+        assert!(parent_and_name("../etc/hosts").is_err());
+    }
+
+    #[test]
+    fn first_child_marks_nested_paths_as_directories() {
+        assert_eq!(
+            first_child("etc/hosts", "/etc"),
+            Some(("hosts".into(), false))
+        );
+        assert_eq!(
+            first_child("etc/nginx/nginx.conf", "/etc"),
+            Some(("nginx".into(), true))
+        );
+    }
+
+    #[test]
+    fn read_tar_file_uses_single_member() {
+        let mut header = super::Header::new_gnu();
+        header.set_size(5);
+        header.set_cksum();
+        let mut builder = super::Builder::new(Vec::new());
+        builder
+            .append_data(&mut header, "hosts", b"hello".as_slice())
+            .unwrap();
+        let buf = builder.into_inner().unwrap();
+        let file = read_tar_file(&buf, "/etc/hosts").unwrap();
+        assert_eq!(file.text, "hello");
+    }
+
+    #[test]
+    fn parse_dir_list_skips_dots_and_sorts_dirs_first() {
+        let rows = parse_dir_list("file\t12\tz.txt\ndir\t0\tapp\nsymlink\t0\tlink\n", "/");
+        assert_eq!(
+            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            ["app", "link", "z.txt"]
+        );
+        assert_eq!(rows[0].path, "/app");
+        assert_eq!(rows[0].kind, "dir");
+    }
+
+    #[test]
+    fn list_tar_children_keeps_only_immediate_names() {
+        let mut builder = super::Builder::new(Vec::new());
+        for (name, data, dir) in [
+            ("app", &b""[..], true),
+            ("app/wwwroot", &b""[..], true),
+            ("app/wwwroot/index.js", b"console.log(1)" as &[u8], false),
+            ("app/Aspire.Dashboard.dll", b"dll" as &[u8], false),
+        ] {
+            let mut header = super::Header::new_gnu();
+            if dir {
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_cksum();
+                builder.append_data(&mut header, name, data).unwrap();
+            } else {
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                builder.append_data(&mut header, name, data).unwrap();
+            }
+        }
+        let buf = builder.into_inner().unwrap();
+        let rows = list_tar_children(buf.as_slice(), "/app").unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            ["wwwroot", "Aspire.Dashboard.dll"]
+        );
+        assert_eq!(rows[0].kind, "dir");
+        assert_eq!(rows[1].kind, "file");
+        assert_eq!(rows[1].size, 3);
+    }
+}
+
+#[derive(Serialize)]
+pub struct PruneResult {
+    pub deleted: i64,
+    pub space_reclaimed: i64,
+}
+
+#[tauri::command]
+pub async fn containers_prune() -> Result<PruneResult, String> {
+    let result = docker()?.prune_containers(None).await.map_err(map_err)?;
+    Ok(PruneResult {
+        deleted: result.containers_deleted.unwrap_or_default().len() as i64,
+        space_reclaimed: result.space_reclaimed.unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+pub async fn images_prune() -> Result<PruneResult, String> {
+    let mut filters = HashMap::new();
+    filters.insert("dangling".to_string(), vec!["false".to_string()]);
+    let result = docker()?
+        .prune_images(Some(
+            PruneImagesOptionsBuilder::default()
+                .filters(&filters)
+                .build(),
+        ))
+        .await
+        .map_err(map_err)?;
+    Ok(PruneResult {
+        deleted: result.images_deleted.unwrap_or_default().len() as i64,
+        space_reclaimed: result.space_reclaimed.unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+pub async fn volumes_prune() -> Result<PruneResult, String> {
+    let result = docker()?
+        .prune_volumes(None::<bollard::query_parameters::PruneVolumesOptions>)
+        .await
+        .map_err(map_err)?;
+    Ok(PruneResult {
+        deleted: result.volumes_deleted.unwrap_or_default().len() as i64,
+        space_reclaimed: result.space_reclaimed.unwrap_or(0),
+    })
 }
 
 #[tauri::command]
@@ -914,6 +1427,11 @@ pub async fn container_create(
     name: Option<String>,
     ports: Vec<String>,
     env: Vec<String>,
+    cmd: Vec<String>,
+    entrypoint: Vec<String>,
+    mounts: Vec<String>,
+    network: Option<String>,
+    restart: Option<String>,
     start: bool,
 ) -> Result<String, String> {
     let image = normalize_image_ref(&image)?;
@@ -938,21 +1456,46 @@ pub async fn container_create(
             });
     }
 
+    let binds = mounts
+        .into_iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| parse_mount_line(&line))
+        .collect::<Result<Vec<_>, _>>()?;
+    let network = network
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let restart_policy = parse_restart(restart.as_deref().unwrap_or(""))?;
+    let needs_host = !port_bindings.is_empty()
+        || !binds.is_empty()
+        || network.is_some()
+        || restart_policy.is_some();
+
     let body = ContainerCreateBody {
         image: Some(image),
+        cmd: nonempty_args(cmd),
+        entrypoint: nonempty_args(entrypoint),
         env: if env.is_empty() { None } else { Some(env) },
         exposed_ports: if exposed_ports.is_empty() {
             None
         } else {
             Some(exposed_ports)
         },
-        host_config: if port_bindings.is_empty() {
-            None
-        } else {
+        host_config: if needs_host {
             Some(HostConfig {
-                port_bindings: Some(port_bindings),
+                port_bindings: if port_bindings.is_empty() {
+                    None
+                } else {
+                    Some(port_bindings)
+                },
+                binds: if binds.is_empty() { None } else { Some(binds) },
+                network_mode: network,
+                restart_policy,
                 ..Default::default()
             })
+        } else {
+            None
         },
         ..Default::default()
     };
@@ -1002,7 +1545,11 @@ pub async fn network_create(name: String, driver: Option<String>) -> Result<Stri
     docker()?
         .create_network(NetworkCreateRequest {
             name: name.clone(),
-            driver: Some(driver.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| "bridge".into())),
+            driver: Some(
+                driver
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "bridge".into()),
+            ),
             ..Default::default()
         })
         .await
@@ -1014,11 +1561,13 @@ pub async fn network_create(name: String, driver: Option<String>) -> Result<Stri
 pub async fn container_fs_list(id: String, path: String) -> Result<Vec<FsEntry>, String> {
     let path = sanitize_path(&path)?;
     let docker = docker()?;
+    if let Ok(rows) = list_via_exec(&docker, &id, &path).await {
+        return Ok(rows);
+    }
     if path == "/" {
         return list_root(&docker, &id).await;
     }
-    let buf = download_archive(&docker, &id, &path).await?;
-    list_tar_children(&buf, &path)
+    list_via_archive(&docker, &id, &path).await
 }
 
 #[tauri::command]
@@ -1027,7 +1576,30 @@ pub async fn container_fs_read(id: String, path: String) -> Result<FsFile, Strin
     if path == "/" {
         return Err("not_a_file".into());
     }
-    let buf = download_archive(&docker()?, &id, &path).await?;
+    let buf = download_archive(
+        &docker()?,
+        &id,
+        &path,
+        MAX_FILE_BYTES as usize + 1024 * 1024,
+    )
+    .await?;
     read_tar_file(&buf, &path)
 }
 
+#[tauri::command]
+pub async fn container_fs_write(id: String, path: String, text: String) -> Result<(), String> {
+    let (parent, name) = parent_and_name(&path)?;
+    let tar = pack_text_file(&name, &text)?;
+    docker()?
+        .upload_to_container(
+            &id,
+            Some(
+                UploadToContainerOptionsBuilder::default()
+                    .path(&parent)
+                    .build(),
+            ),
+            body_full(tar.into()),
+        )
+        .await
+        .map_err(map_err)
+}

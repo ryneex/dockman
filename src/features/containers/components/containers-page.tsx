@@ -1,47 +1,43 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  FileText,
-  Folder,
-  Play,
-  Plus,
-  RefreshCw,
-  RotateCw,
-  ScanSearch,
-  Square,
-  Trash2,
-} from "lucide-react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Eraser, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
-import { CopyId, InspectDrawer, LogsDrawer, RowActions } from "@/components/common"
+import { CopyId, RowActions } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
-import { IconButton } from "@/components/ui/icon-button"
 import { TableSkeleton } from "@/components/ui/skeleton"
 import { StatusChip } from "@/components/ui/status-dot"
 import { Table, TCell, THead, TRow } from "@/components/ui/table"
-import { Tooltip } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
 import { formatAge, matchesQuery } from "@/lib/format"
+import { isActiveContainer, pruneMessage } from "@/lib/housekeeping"
 import { useContainers } from "@/lib/queries"
 import type { ContainerRow } from "@/lib/types"
+import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
-import { FilesDrawer } from "./files-drawer"
+import { useContainerAct } from "../lib/use-container-act"
+import { ContainerActions } from "./container-actions"
 import { PortList } from "./port-list"
+import { RenameContainerDialog } from "./rename-container-dialog"
 import { RunContainerDialog } from "./run-container-dialog"
 
 export function ContainersPage() {
   const query = useContainers()
   const { query: filter } = useFilter()
   const client = useQueryClient()
-  const [inspectId, setInspectId] = useState<string | null>(null)
-  const [logsId, setLogsId] = useState<string | null>(null)
-  const [filesId, setFilesId] = useState<string | null>(null)
+  const navigate = useNavigate()
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<ContainerRow | null>(null)
+  const [renameTarget, setRenameTarget] = useState<ContainerRow | null>(null)
+  const [pruneOpen, setPruneOpen] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const rows = useMemo(
     () =>
@@ -58,59 +54,50 @@ export function ContainersPage() {
       ),
     [filter, query.data],
   )
-
-  const inspect = useQuery({
-    queryKey: ["container-inspect", inspectId],
-    queryFn: () => api.containerInspect(inspectId!),
-    enabled: Boolean(inspectId),
-  })
-
-  const { index, setIndex } = useTableNav(rows, (row) => setInspectId(row.id))
-  const selected = inspectId ? rows.find((row) => row.id === inspectId) : undefined
-  const logsRow = logsId ? rows.find((row) => row.id === logsId) : undefined
-  const filesRow = filesId ? rows.find((row) => row.id === filesId) : undefined
-
-  const act = useMutation({
-    mutationFn: async ({ id, op }: { id: string; op: "start" | "stop" | "restart" }) => {
-      if (op === "start") return api.containerStart(id)
-      if (op === "stop") return api.containerStop(id)
-      return api.containerRestart(id)
-    },
-    onMutate: async ({ id, op }) => {
-      await client.cancelQueries({ queryKey: ["containers"] })
-      const previous = client.getQueryData<ContainerRow[]>(["containers"])
-      client.setQueryData<ContainerRow[]>(["containers"], (current = []) =>
-        current.map((row) =>
-          row.id === id
-            ? {
-                ...row,
-                state: op === "stop" ? "exited" : "running",
-                status:
-                  op === "restart"
-                    ? "restarting..."
-                    : op === "stop"
-                      ? "stopping..."
-                      : "starting...",
-              }
-            : row,
-        ),
-      )
-      return { previous }
-    },
-    onError: (error, _vars, ctx) => {
-      if (ctx?.previous) client.setQueryData(["containers"], ctx.previous)
-      toast.error(String(error))
-    },
-    onSettled: () => client.invalidateQueries({ queryKey: ["containers"] }),
-  })
+  const stopped = useMemo(
+    () => (query.data ?? []).filter((row) => !isActiveContainer(row.state)),
+    [query.data],
+  )
+  const selection = useSelection(rows, (row) => row.id)
+  const { index, setIndex } = useTableNav(rows, (row) => void navigate(`/containers/${row.id}`))
+  const act = useContainerAct()
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.containerRemove(id),
-    onSuccess: () => {
+    mutationFn: async (ids: string[]) => {
+      const errors: string[] = []
+      for (const id of ids) {
+        try {
+          await api.containerRemove(id)
+        } catch (error) {
+          errors.push(String(error))
+        }
+      }
+      if (errors.length) throw new Error(errors[0])
+    },
+    onSuccess: (_data, ids) => {
       setRemoveTarget(null)
-      void client.invalidateQueries({ queryKey: ["containers"] })
+      setBulkOpen(false)
+      selection.clear()
+      toast.success(ids.length > 1 ? `Removed ${ids.length} containers` : "Removed container")
     },
     onError: (error) => toast.error(String(error)),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["containers"] })
+      void client.invalidateQueries({ queryKey: ["engine"] })
+    },
+  })
+
+  const prune = useMutation({
+    mutationFn: api.containersPrune,
+    onSuccess: (result) => {
+      setPruneOpen(false)
+      toast.success(pruneMessage("containers", result))
+    },
+    onError: (error) => toast.error(String(error)),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["containers"] })
+      void client.invalidateQueries({ queryKey: ["engine"] })
+    },
   })
 
   const body = query.isError ? (
@@ -130,118 +117,92 @@ export function ContainersPage() {
   ) : !rows.length ? (
     <EmptyState title="No matches" body="Nothing in this view matches the current filter." />
   ) : (
-    <Table cols={["w-[16%]", "w-[22%]", "w-[20%]", "w-[22%]", "w-[8%]", "w-[12%]", "w-0"]}>
-      <THead columns={["Name", "Image", "Status", "Ports", "Age", "ID", ""]} />
+    <Table cols={["w-12", "w-[16%]", "w-[20%]", "w-[18%]", "w-[20%]", "w-[8%]", "w-[10%]", "w-0"]}>
+      <THead
+        columns={[
+          <Checkbox
+            key="all"
+            checked={selection.allSelected}
+            indeterminate={selection.someSelected && !selection.allSelected}
+            onChange={() => selection.toggleAll()}
+            aria-label="Select all containers"
+          />,
+          "Name",
+          "Image",
+          "Status",
+          "Ports",
+          "Age",
+          "ID",
+          "",
+        ]}
+      />
       <tbody>
-        {rows.map((row, rowIndex) => {
-          const running = row.state === "running"
-          return (
-            <TRow key={row.id} active={rowIndex === index} onClick={() => setIndex(rowIndex)}>
-              <TCell>{row.name || "—"}</TCell>
-              <TCell className="text-muted">{row.image}</TCell>
-              <TCell>
-                <StatusChip state={row.state} label={row.status} />
-              </TCell>
-              <TCell>
-                <PortList ports={row.ports} />
-              </TCell>
-              <TCell className="text-muted">{formatAge(row.created)}</TCell>
-              <TCell>
-                <CopyId id={row.id} />
-              </TCell>
-              <RowActions>
-                <Tooltip label={running ? "Stop" : "Start"}>
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      act.mutate({ id: row.id, op: running ? "stop" : "start" })
-                    }}
-                  >
-                    {running ? <Square size={16} /> : <Play size={16} />}
-                  </IconButton>
-                </Tooltip>
-                <Tooltip label="Restart">
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      act.mutate({ id: row.id, op: "restart" })
-                    }}
-                  >
-                    <RotateCw size={16} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip label="Logs">
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setLogsId(row.id)
-                    }}
-                  >
-                    <FileText size={16} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip label="Files">
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setFilesId(row.id)
-                    }}
-                  >
-                    <Folder size={16} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip label="Inspect">
-                  <IconButton
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setInspectId(row.id)
-                    }}
-                  >
-                    <ScanSearch size={16} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip label="Remove">
-                  <IconButton
-                    danger
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setRemoveTarget(row)
-                    }}
-                  >
-                    <Trash2 size={16} />
-                  </IconButton>
-                </Tooltip>
-              </RowActions>
-            </TRow>
-          )
-        })}
+        {rows.map((row, rowIndex) => (
+          <TRow
+            key={row.id}
+            active={rowIndex === index}
+            onClick={() => {
+              setIndex(rowIndex)
+              void navigate(`/containers/${row.id}`)
+            }}
+          >
+            <TCell truncate={false}>
+              <Checkbox
+                checked={selection.ids.has(row.id)}
+                onChange={() => selection.toggle(row.id)}
+                aria-label={`Select ${row.name || row.id}`}
+              />
+            </TCell>
+            <TCell>{row.name || "—"}</TCell>
+            <TCell className="text-muted">{row.image}</TCell>
+            <TCell>
+              <StatusChip state={row.state} label={row.status} />
+            </TCell>
+            <TCell>
+              <PortList ports={row.ports} />
+            </TCell>
+            <TCell className="text-muted">{formatAge(row.created)}</TCell>
+            <TCell>
+              <CopyId id={row.id} />
+            </TCell>
+            <RowActions>
+              <ContainerActions
+                row={row}
+                act={act}
+                onRename={() => setRenameTarget(row)}
+                onRemove={() => setRemoveTarget(row)}
+              />
+            </RowActions>
+          </TRow>
+        ))}
       </tbody>
     </Table>
   )
 
   return (
     <ListPage
-      action={<RunContainerDialog open={createOpen} trigger onOpenChange={setCreateOpen} />}
+      action={
+        <>
+          {selection.selected.length ? (
+            <Button variant="danger" icon={<Trash2 />} onClick={() => setBulkOpen(true)}>
+              Remove {selection.selected.length}
+            </Button>
+          ) : null}
+          <Button icon={<Eraser />} disabled={!stopped.length} onClick={() => setPruneOpen(true)}>
+            Prune unused
+          </Button>
+          <RunContainerDialog open={createOpen} trigger onOpenChange={setCreateOpen} />
+        </>
+      }
     >
       {body}
-      <InspectDrawer
-        open={Boolean(inspectId)}
-        title={selected?.name ?? "Inspect"}
-        data={inspect.data}
-        loading={inspect.isLoading}
-        onClose={() => setInspectId(null)}
-      />
-      <LogsDrawer
-        open={Boolean(logsId)}
-        containerId={logsId}
-        title={logsRow ? `Logs · ${logsRow.name}` : "Logs"}
-        onClose={() => setLogsId(null)}
-      />
-      <FilesDrawer
-        open={Boolean(filesId)}
-        containerId={filesId}
-        title={filesRow ? `Files · ${filesRow.name}` : "Files"}
-        onClose={() => setFilesId(null)}
+      <RenameContainerDialog
+        open={Boolean(renameTarget)}
+        id={renameTarget?.id ?? null}
+        name={renameTarget?.name ?? ""}
+        onOpenChange={(next) => {
+          if (!next) setRenameTarget(null)
+        }}
       />
       <ConfirmDialog
         open={Boolean(removeTarget)}
@@ -250,8 +211,28 @@ export function ContainersPage() {
         confirmLabel="Remove"
         danger
         pending={remove.isPending}
-        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+        onConfirm={() => removeTarget && remove.mutate([removeTarget.id])}
         onClose={() => setRemoveTarget(null)}
+      />
+      <ConfirmDialog
+        open={bulkOpen}
+        title="Remove containers"
+        description={`This will permanently remove ${selection.selected.length} selected containers.`}
+        confirmLabel="Remove"
+        danger
+        pending={remove.isPending}
+        onConfirm={() => remove.mutate(selection.selected.map((row) => row.id))}
+        onClose={() => setBulkOpen(false)}
+      />
+      <ConfirmDialog
+        open={pruneOpen}
+        title="Prune unused containers"
+        description={`This will remove ${stopped.length} stopped containers.`}
+        confirmLabel="Prune"
+        danger
+        pending={prune.isPending}
+        onConfirm={() => prune.mutate()}
+        onClose={() => setPruneOpen(false)}
       />
     </ListPage>
   )

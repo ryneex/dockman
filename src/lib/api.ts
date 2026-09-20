@@ -10,6 +10,7 @@ import type {
   ImageSearchRow,
   LogChunk,
   NetworkRow,
+  PruneResult,
   VolumeRow,
 } from "@/lib/types"
 
@@ -19,6 +20,9 @@ export const api = {
   containerStart: (id: string) => invoke<void>("container_start", { id }),
   containerStop: (id: string) => invoke<void>("container_stop", { id }),
   containerRestart: (id: string) => invoke<void>("container_restart", { id }),
+  containerPause: (id: string) => invoke<void>("container_pause", { id }),
+  containerUnpause: (id: string) => invoke<void>("container_unpause", { id }),
+  containerRename: (id: string, name: string) => invoke<void>("container_rename", { id, name }),
   containerRemove: (id: string) => invoke<void>("container_remove", { id }),
   containerInspect: (id: string) => invoke<unknown>("container_inspect", { id }),
   containerLogs: (id: string) => invoke<void>("container_logs", { id }),
@@ -33,6 +37,11 @@ export const api = {
     name?: string
     ports: string[]
     env: string[]
+    cmd: string[]
+    entrypoint: string[]
+    mounts: string[]
+    network?: string
+    restart?: string
     start: boolean
   }) =>
     invoke<string>("container_create", {
@@ -40,8 +49,16 @@ export const api = {
       name: input.name || null,
       ports: input.ports,
       env: input.env,
+      cmd: input.cmd,
+      entrypoint: input.entrypoint,
+      mounts: input.mounts,
+      network: input.network || null,
+      restart: input.restart || null,
       start: input.start,
     }),
+  containersPrune: () => invoke<PruneResult>("containers_prune"),
+  imagesPrune: () => invoke<PruneResult>("images_prune"),
+  volumesPrune: () => invoke<PruneResult>("volumes_prune"),
   volumeCreate: (name: string, driver?: string) =>
     invoke<string>("volume_create", { name, driver }),
   networkCreate: (name: string, driver?: string) =>
@@ -49,6 +66,8 @@ export const api = {
   containerFsList: (id: string, path: string) =>
     invoke<FsEntry[]>("container_fs_list", { id, path }),
   containerFsRead: (id: string, path: string) => invoke<FsFile>("container_fs_read", { id, path }),
+  containerFsWrite: (id: string, path: string, text: string) =>
+    invoke<void>("container_fs_write", { id, path, text }),
   listVolumes: () => invoke<VolumeRow[]>("list_volumes"),
   volumeInspect: (name: string) => invoke<unknown>("volume_inspect", { name }),
   volumeRemove: (name: string) => invoke<void>("volume_remove", { name }),

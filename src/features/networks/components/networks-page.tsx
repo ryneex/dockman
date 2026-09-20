@@ -6,6 +6,8 @@ import { toast } from "sonner"
 import { CopyId, InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
@@ -14,11 +16,17 @@ import { Table, TCell, THead, TRow } from "@/components/ui/table"
 import { Tooltip } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
 import { matchesQuery } from "@/lib/format"
+import { isUnused } from "@/lib/housekeeping"
 import { useNetworks } from "@/lib/queries"
 import type { NetworkRow } from "@/lib/types"
+import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
 import { CreateNetworkDialog } from "./create-network-dialog"
+
+function canRemove(row: NetworkRow) {
+  return !row.builtin && isUnused(row)
+}
 
 export function NetworksPage() {
   const query = useNetworks()
@@ -27,6 +35,7 @@ export function NetworksPage() {
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<NetworkRow | null>(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const rows = useMemo(
     () =>
@@ -35,6 +44,7 @@ export function NetworksPage() {
       ),
     [filter, query.data],
   )
+  const selection = useSelection(rows, (row) => row.id, canRemove)
 
   const inspect = useQuery({
     queryKey: ["network-inspect", inspectId],
@@ -46,12 +56,25 @@ export function NetworksPage() {
   const selected = inspectId ? rows.find((row) => row.id === inspectId) : undefined
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.networkRemove(id),
-    onSuccess: () => {
+    mutationFn: async (ids: string[]) => {
+      const errors: string[] = []
+      for (const id of ids) {
+        try {
+          await api.networkRemove(id)
+        } catch (error) {
+          errors.push(String(error))
+        }
+      }
+      if (errors.length) throw new Error(errors[0])
+    },
+    onSuccess: (_data, ids) => {
       setRemoveTarget(null)
-      void client.invalidateQueries({ queryKey: ["networks"] })
+      setBulkOpen(false)
+      selection.clear()
+      toast.success(ids.length > 1 ? `Removed ${ids.length} networks` : "Removed network")
     },
     onError: (error) => toast.error(String(error)),
+    onSettled: () => void client.invalidateQueries({ queryKey: ["networks"] }),
   })
 
   const body = query.isError ? (
@@ -71,8 +94,24 @@ export function NetworksPage() {
   ) : !rows.length ? (
     <EmptyState title="No matches" body="Nothing in this view matches the current filter." />
   ) : (
-    <Table cols={["w-[22%]", "w-[14%]", "w-[12%]", "w-[24%]", "w-[28%]", "w-0"]}>
-      <THead columns={["Name", "Driver", "Scope", "Used by", "ID", ""]} />
+    <Table cols={["w-12", "w-[20%]", "w-[12%]", "w-[12%]", "w-[22%]", "w-[24%]", "w-0"]}>
+      <THead
+        columns={[
+          <Checkbox
+            key="all"
+            checked={selection.allSelected}
+            indeterminate={selection.someSelected && !selection.allSelected}
+            onChange={() => selection.toggleAll()}
+            aria-label="Select unused networks"
+          />,
+          "Name",
+          "Driver",
+          "Scope",
+          "Used by",
+          "ID",
+          "",
+        ]}
+      />
       <tbody>
         {rows.map((row, rowIndex) => (
           <TRow
@@ -80,6 +119,14 @@ export function NetworksPage() {
             active={rowIndex === index}
             onClick={() => setIndex(rowIndex)}
           >
+            <TCell truncate={false}>
+              <Checkbox
+                checked={selection.ids.has(row.id)}
+                disabled={!canRemove(row)}
+                onChange={() => selection.toggle(row.id)}
+                aria-label={`Select ${row.name}`}
+              />
+            </TCell>
             <TCell>{row.name}</TCell>
             <TCell className="text-muted">{row.driver}</TCell>
             <TCell className="text-muted">{row.scope}</TCell>
@@ -111,7 +158,7 @@ export function NetworksPage() {
               >
                 <IconButton
                   danger
-                  disabled={row.builtin || (row.used_by?.length ?? 0) > 0}
+                  disabled={!canRemove(row)}
                   onClick={(event) => {
                     event.stopPropagation()
                     setRemoveTarget(row)
@@ -128,7 +175,18 @@ export function NetworksPage() {
   )
 
   return (
-    <ListPage action={<CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />}>
+    <ListPage
+      action={
+        <>
+          {selection.selected.length ? (
+            <Button variant="danger" icon={<Trash2 />} onClick={() => setBulkOpen(true)}>
+              Remove {selection.selected.length}
+            </Button>
+          ) : null}
+          <CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />
+        </>
+      }
+    >
       {body}
       <InspectDrawer
         open={Boolean(inspectId)}
@@ -144,8 +202,18 @@ export function NetworksPage() {
         confirmLabel="Remove"
         danger
         pending={remove.isPending}
-        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+        onConfirm={() => removeTarget && remove.mutate([removeTarget.id])}
         onClose={() => setRemoveTarget(null)}
+      />
+      <ConfirmDialog
+        open={bulkOpen}
+        title="Remove networks"
+        description={`This will remove ${selection.selected.length} unused networks.`}
+        confirmLabel="Remove"
+        danger
+        pending={remove.isPending}
+        onConfirm={() => remove.mutate(selection.selected.map((row) => row.id))}
+        onClose={() => setBulkOpen(false)}
       />
     </ListPage>
   )

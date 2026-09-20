@@ -1,11 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Download, Play, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Download, Eraser, Play, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { CopyId, InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
@@ -15,8 +17,10 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { RunContainerDialog } from "@/features/containers"
 import { api } from "@/lib/api"
 import { formatAge, formatBytes, matchesQuery } from "@/lib/format"
-import { useImages } from "@/lib/queries"
+import { isUnused, pruneMessage } from "@/lib/housekeeping"
+import { useImageInspect, useImages } from "@/lib/queries"
 import type { ImageRow } from "@/lib/types"
+import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
 import { PullImageDialog } from "./pull-image-dialog"
@@ -29,31 +33,67 @@ export function ImagesPage() {
   const [pullOpen, setPullOpen] = useState(false)
   const [runImage, setRunImage] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<ImageRow | null>(null)
+  const [pruneOpen, setPruneOpen] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const rows = useMemo(
     () =>
       (query.data ?? []).filter((row) =>
-        matchesQuery(filter, row.id, row.tags.join(" "), ...usageNames(row.used_by)),
+        matchesQuery(
+          filter,
+          row.id,
+          row.dangling ? "dangling" : "",
+          row.tags.join(" "),
+          ...usageNames(row.used_by),
+        ),
       ),
     [filter, query.data],
   )
+  const unused = useMemo(() => (query.data ?? []).filter(isUnused), [query.data])
+  const danglingCount = unused.filter((row) => row.dangling).length
+  const selection = useSelection(rows, (row) => row.id, isUnused)
 
-  const inspect = useQuery({
-    queryKey: ["image-inspect", inspectId],
-    queryFn: () => api.imageInspect(inspectId!),
-    enabled: Boolean(inspectId),
-  })
+  const inspect = useImageInspect(inspectId)
 
   const { index, setIndex } = useTableNav(rows, (row) => setInspectId(row.id))
   const selected = inspectId ? rows.find((row) => row.id === inspectId) : undefined
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.imageRemove(id),
-    onSuccess: () => {
+    mutationFn: async (ids: string[]) => {
+      const errors: string[] = []
+      for (const id of ids) {
+        try {
+          await api.imageRemove(id)
+        } catch (error) {
+          errors.push(String(error))
+        }
+      }
+      if (errors.length) throw new Error(errors[0])
+    },
+    onSuccess: (_data, ids) => {
       setRemoveTarget(null)
-      void client.invalidateQueries({ queryKey: ["images"] })
+      setBulkOpen(false)
+      selection.clear()
+      toast.success(ids.length > 1 ? `Removed ${ids.length} images` : "Removed image")
     },
     onError: (error) => toast.error(String(error)),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["images"] })
+      void client.invalidateQueries({ queryKey: ["engine"] })
+    },
+  })
+
+  const prune = useMutation({
+    mutationFn: api.imagesPrune,
+    onSuccess: (result) => {
+      setPruneOpen(false)
+      toast.success(pruneMessage("images", result))
+    },
+    onError: (error) => toast.error(String(error)),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["images"] })
+      void client.invalidateQueries({ queryKey: ["engine"] })
+    },
   })
 
   const body = query.isError ? (
@@ -73,12 +113,45 @@ export function ImagesPage() {
   ) : !rows.length ? (
     <EmptyState title="No matches" body="Nothing in this view matches the current filter." />
   ) : (
-    <Table cols={["w-[34%]", "w-[22%]", "w-[12%]", "w-[10%]", "w-[22%]", "w-0"]}>
-      <THead columns={["Tags", "Used by", "Size", "Age", "ID", ""]} />
+    <Table cols={["w-12", "w-[32%]", "w-[20%]", "w-[12%]", "w-[10%]", "w-[18%]", "w-0"]}>
+      <THead
+        columns={[
+          <Checkbox
+            key="all"
+            checked={selection.allSelected}
+            indeterminate={selection.someSelected && !selection.allSelected}
+            onChange={() => selection.toggleAll()}
+            aria-label="Select unused images"
+          />,
+          "Tags",
+          "Used by",
+          "Size",
+          "Age",
+          "ID",
+          "",
+        ]}
+      />
       <tbody>
         {rows.map((row, rowIndex) => (
           <TRow key={row.id} active={rowIndex === index} onClick={() => setIndex(rowIndex)}>
-            <TCell>{row.tags.join(", ") || "<none>"}</TCell>
+            <TCell truncate={false}>
+              <Checkbox
+                checked={selection.ids.has(row.id)}
+                disabled={!isUnused(row)}
+                onChange={() => selection.toggle(row.id)}
+                aria-label={`Select ${row.tags[0] || row.id}`}
+              />
+            </TCell>
+            <TCell>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <span className="truncate">{row.tags.join(", ") || "<none>"}</span>
+                {row.dangling ? (
+                  <span className="bg-hover text-faint shrink-0 rounded-full px-2 py-0.5 text-xs">
+                    dangling
+                  </span>
+                ) : null}
+              </span>
+            </TCell>
             <TCell>
               <UsedBy items={row.used_by} />
             </TCell>
@@ -132,7 +205,21 @@ export function ImagesPage() {
   )
 
   return (
-    <ListPage action={<PullImageDialog open={pullOpen} onOpenChange={setPullOpen} />}>
+    <ListPage
+      action={
+        <>
+          {selection.selected.length ? (
+            <Button variant="danger" icon={<Trash2 />} onClick={() => setBulkOpen(true)}>
+              Remove {selection.selected.length}
+            </Button>
+          ) : null}
+          <Button icon={<Eraser />} disabled={!unused.length} onClick={() => setPruneOpen(true)}>
+            Prune unused
+          </Button>
+          <PullImageDialog open={pullOpen} onOpenChange={setPullOpen} />
+        </>
+      }
+    >
       {body}
       <RunContainerDialog
         open={Boolean(runImage)}
@@ -155,8 +242,32 @@ export function ImagesPage() {
         confirmLabel="Remove"
         danger
         pending={remove.isPending}
-        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+        onConfirm={() => removeTarget && remove.mutate([removeTarget.id])}
         onClose={() => setRemoveTarget(null)}
+      />
+      <ConfirmDialog
+        open={bulkOpen}
+        title="Remove images"
+        description={`This will remove ${selection.selected.length} unused images.`}
+        confirmLabel="Remove"
+        danger
+        pending={remove.isPending}
+        onConfirm={() => remove.mutate(selection.selected.map((row) => row.id))}
+        onClose={() => setBulkOpen(false)}
+      />
+      <ConfirmDialog
+        open={pruneOpen}
+        title="Prune unused images"
+        description={
+          danglingCount
+            ? `This will remove ${unused.length} unused images, including ${danglingCount} dangling.`
+            : `This will remove ${unused.length} unused images.`
+        }
+        confirmLabel="Prune"
+        danger
+        pending={prune.isPending}
+        onConfirm={() => prune.mutate()}
+        onClose={() => setPruneOpen(false)}
       />
     </ListPage>
   )

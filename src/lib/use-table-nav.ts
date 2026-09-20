@@ -2,7 +2,11 @@ import { useEffect, useState } from "react"
 
 function isEditable(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
-  return Boolean(target.closest("input, textarea, [contenteditable='true']"))
+  return Boolean(
+    target.closest(
+      "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='listbox'], [role='option']",
+    ),
+  )
 }
 
 export function useTableNav<T>(items: T[], onInspect: (item: T) => void) {

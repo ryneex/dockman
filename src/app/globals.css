@@ -24,7 +24,8 @@
   --radius-control: 8px;
   --radius-card: 12px;
 
-  --container-dialog: 35rem;
+  --container-dialog: 40rem;
+  --container-dialog-wide: 56rem;
 }
 
 html,
@@ -58,7 +59,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 

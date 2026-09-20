@@ -32,8 +32,16 @@ export type ImageRow = {
   tags: string[]
   size: number
   created: number
+  dangling: boolean
   used_by: UsageRef[]
 }
+
+export type PruneResult = {
+  deleted: number
+  space_reclaimed: number
+}
+
+export type RestartPolicy = "no" | "on-failure" | "always" | "unless-stopped"
 
 export type ImageSearchRow = {
   name: string

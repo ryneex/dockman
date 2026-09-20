@@ -5,6 +5,7 @@ import type { FormEvent, ReactElement, ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { motionOrInstant, panel } from "@/lib/motion"
+import { cn } from "@/lib/utils"
 
 export function FormDialog({
   open,
@@ -14,7 +15,9 @@ export function FormDialog({
   confirmIcon,
   pending,
   error,
+  wide,
   trigger,
+  aside,
   onSubmit,
   onOpenChange,
   children,
@@ -26,14 +29,19 @@ export function FormDialog({
   confirmIcon?: ReactNode
   pending?: boolean
   error?: string | null
+  wide?: boolean
   trigger?: ReactElement
-  onSubmit: () => void
+  aside?: ReactNode
+  onSubmit: (event: FormEvent) => void
   onOpenChange: (open: boolean) => void
   children: ReactNode
 }) {
   function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    if (!pending) onSubmit()
+    if (pending) {
+      event.preventDefault()
+      return
+    }
+    onSubmit(event)
   }
 
   return (
@@ -54,11 +62,16 @@ export function FormDialog({
                 initial={{ opacity: 0, y: 8, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={motionOrInstant(panel)}
-                className="border-border bg-elevated flex max-h-[calc(100dvh-3rem)] min-h-80 w-[min(var(--container-dialog),calc(100vw-3rem))] flex-col overflow-y-auto rounded-[12px] border px-8 py-7 shadow-2xl shadow-black/50 outline-none"
+                className={cn(
+                  "border-border bg-elevated flex max-h-[calc(100dvh-3rem)] min-h-80 flex-col overflow-y-auto rounded-[12px] border px-8 py-7 shadow-2xl shadow-black/50 outline-none",
+                  wide
+                    ? "w-[min(var(--container-dialog-wide),calc(100vw-3rem))]"
+                    : "w-[min(var(--container-dialog),calc(100vw-3rem))]",
+                )}
               />
             }
           >
-            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+            <form noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
               <Dialog.Title className="tracking-[-0.03em]">{title}</Dialog.Title>
               {description ? (
                 <Dialog.Description className="text-muted mt-2 text-sm">
@@ -67,7 +80,8 @@ export function FormDialog({
               ) : null}
               <div className="mt-5 grid flex-1 content-start gap-4">{children}</div>
               {error ? <p className="text-exited mt-3 text-sm">{error}</p> : null}
-              <div className="mt-6 flex justify-end gap-2">
+              <div className="mt-6 flex items-center justify-end gap-2">
+                {aside ? <div className="mr-auto">{aside}</div> : null}
                 <Button
                   type="button"
                   icon={<X />}

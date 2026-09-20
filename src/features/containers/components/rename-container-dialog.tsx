@@ -1,57 +1,56 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus } from "lucide-react"
+import { Pencil } from "lucide-react"
 import { useEffect } from "react"
 import { Controller, useForm } from "react-hook-form"
 
-import { Button } from "@/components/ui/button"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api } from "@/lib/api"
-import { CreateNetwork, type CreateNetworkValues } from "@/lib/create-form"
+import { RenameContainer, type RenameContainerValues } from "@/lib/create-form"
 
-export function CreateNetworkDialog({
+export function RenameContainerDialog({
   open,
+  id,
+  name,
   onOpenChange,
 }: {
   open: boolean
+  id: string | null
+  name: string
   onOpenChange: (open: boolean) => void
 }) {
   const client = useQueryClient()
   const form = useForm({
-    resolver: zodResolver(CreateNetwork),
-    defaultValues: { name: "", driver: "bridge" },
+    resolver: zodResolver(RenameContainer),
+    defaultValues: { name },
   })
 
   const { mutate, isPending, error, reset } = useMutation({
-    mutationFn: async ({ name, driver }: CreateNetworkValues) => {
-      await api.networkCreate(name, driver)
+    mutationFn: async ({ name }: RenameContainerValues) => {
+      if (!id) throw new Error("Container is required")
+      await api.containerRename(id, name)
     },
     onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: ["networks"] })
+      await client.invalidateQueries({ queryKey: ["containers"] })
       onOpenChange(false)
     },
   })
 
   useEffect(() => {
     if (!open) return
-    form.reset({ name: "", driver: "bridge" })
+    form.reset({ name })
     reset()
-  }, [form, open, reset])
+  }, [form, name, open, reset])
 
   return (
     <FormDialog
       open={open}
-      title="Create network"
-      confirmLabel="Create"
-      confirmIcon={<Plus />}
+      title="Rename container"
+      confirmLabel="Rename"
+      confirmIcon={<Pencil />}
       pending={isPending}
       error={error ? String(error) : null}
-      trigger={
-        <Button variant="primary" icon={<Plus />}>
-          New
-        </Button>
-      }
       onSubmit={form.handleSubmit((values) => mutate(values))}
       onOpenChange={onOpenChange}
     >
@@ -61,15 +60,6 @@ export function CreateNetworkDialog({
         render={({ field, fieldState }) => (
           <Field label="Name" errors={[fieldState.error]}>
             <TextInput {...field} autoFocus aria-invalid={fieldState.invalid} />
-          </Field>
-        )}
-      />
-      <Controller
-        name="driver"
-        control={form.control}
-        render={({ field, fieldState }) => (
-          <Field label="Driver" errors={[fieldState.error]}>
-            <TextInput {...field} placeholder="bridge" aria-invalid={fieldState.invalid} />
           </Field>
         )}
       />
