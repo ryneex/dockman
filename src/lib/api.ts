@@ -6,11 +6,13 @@ import type {
   EngineInfo,
   FsEntry,
   FsFile,
+  HostTerminal,
   ImageRow,
   ImageSearchRow,
   LogChunk,
   NetworkRow,
   PruneResult,
+  TermChunk,
   VolumeRow,
 } from "@/lib/types"
 
@@ -23,6 +25,15 @@ export const api = {
   containerPause: (id: string) => invoke<void>("container_pause", { id }),
   containerUnpause: (id: string) => invoke<void>("container_unpause", { id }),
   containerRename: (id: string, name: string) => invoke<void>("container_rename", { id, name }),
+  containerOpenTerminal: (id: string, terminal?: string | null) =>
+    invoke<void>("container_open_terminal", { id, terminal: terminal || null }),
+  listHostTerminals: () => invoke<HostTerminal[]>("list_host_terminals"),
+  containerTermStart: (id: string) => invoke<void>("container_term_start", { id }),
+  containerTermWrite: (id: string, data: string) =>
+    invoke<void>("container_term_write", { id, data }),
+  containerTermResize: (id: string, cols: number, rows: number) =>
+    invoke<void>("container_term_resize", { id, cols, rows }),
+  containerTermStop: (id: string) => invoke<void>("container_term_stop", { id }),
   containerRemove: (id: string) => invoke<void>("container_remove", { id }),
   containerInspect: (id: string) => invoke<unknown>("container_inspect", { id }),
   containerLogs: (id: string) => invoke<void>("container_logs", { id }),
@@ -84,6 +95,22 @@ export function listenImagePull(
   return Promise.all([
     listen<LogChunk>("image-pull", (event) => onChunk(event.payload)),
     listen<string>("image-pull-end", (event) => onEnd?.(event.payload)),
+  ]).then((fns) => {
+    cleanups.push(...fns)
+    return () => {
+      for (const fn of cleanups) fn()
+    }
+  })
+}
+
+export function listenContainerTerm(
+  onChunk: (chunk: TermChunk) => void,
+  onEnd?: (id: string) => void,
+): Promise<UnlistenFn> {
+  const cleanups: UnlistenFn[] = []
+  return Promise.all([
+    listen<TermChunk>("container-term", (event) => onChunk(event.payload)),
+    listen<string>("container-term-end", (event) => onEnd?.(event.payload)),
   ]).then((fns) => {
     cleanups.push(...fns)
     return () => {

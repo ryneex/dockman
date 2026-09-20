@@ -5,6 +5,7 @@ import {
   ContainerInspectTab,
   ContainerLogsTab,
   ContainerPage,
+  ContainerTerminalTab,
   ContainersPage,
 } from "@/features/containers"
 import { DashboardPage } from "@/features/dashboard"
@@ -23,6 +24,7 @@ export function AppRoutes() {
       <Route path="/containers/:id" element={<ContainerPage />}>
         <Route index element={<ContainerLogsTab />} />
         <Route path="files" element={<ContainerFilesTab />} />
+        <Route path="terminal" element={<ContainerTerminalTab />} />
         <Route path="inspect" element={<ContainerInspectTab />} />
       </Route>
       <Route path="/images" element={<ImagesPage />} />

@@ -1,11 +1,29 @@
+import { useQuery } from "@tanstack/react-query"
 import { Check } from "lucide-react"
 
 import { useSettings } from "@/components/providers"
+import { Select } from "@/components/ui/select"
+import { api } from "@/lib/api"
 import { UI_SCALE_META, UI_SCALES } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
 export function SettingsPage() {
-  const { settings, setUiScale } = useSettings()
+  const { settings, setUiScale, setTerminalApp, setTerminalTarget } = useSettings()
+  const terminals = useQuery({
+    queryKey: ["host-terminals"],
+    queryFn: api.listHostTerminals,
+    staleTime: 60_000,
+  })
+  const terminalItems = [
+    { value: "auto", label: "Auto-detect" },
+    ...(terminals.data ?? []).map((row) => ({ value: row.id, label: row.label })),
+  ]
+  if (
+    settings.terminalApp !== "auto" &&
+    !terminalItems.some((item) => item.value === settings.terminalApp)
+  ) {
+    terminalItems.push({ value: settings.terminalApp, label: settings.terminalApp })
+  }
 
   return (
     <div className="relative min-h-full overflow-auto p-6">
@@ -43,6 +61,60 @@ export function SettingsPage() {
               </button>
             )
           })}
+        </div>
+      </section>
+
+      <section className="border-border bg-elevated mt-5 rounded-[12px] border p-5">
+        <h2 className="tracking-[-0.03em]">Terminal</h2>
+        <p className="text-muted mt-1 text-sm">
+          The container action opens your preferred place. A Terminal tab is always available on the
+          container page.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {(
+            [
+              {
+                value: "external" as const,
+                label: "External app",
+                hint: "Open the host terminal you pick below",
+              },
+              {
+                value: "embedded" as const,
+                label: "In Dockman",
+                hint: "Open the Terminal tab on the container",
+              },
+            ] as const
+          ).map((option) => {
+            const selected = settings.terminalTarget === option.value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setTerminalTarget(option.value)}
+                className={cn(
+                  "rounded-[12px] border p-4 text-left transition-colors",
+                  selected
+                    ? "border-accent bg-accent/10"
+                    : "border-border bg-canvas hover:bg-hover",
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="tracking-[-0.03em]">{option.label}</p>
+                  {selected ? <Check size={16} className="text-accent" /> : null}
+                </div>
+                <p className="text-muted mt-1 text-sm">{option.hint}</p>
+              </button>
+            )
+          })}
+        </div>
+        <div className="mt-4 max-w-sm">
+          <p className="text-muted mb-2 text-sm">External app</p>
+          <Select
+            value={settings.terminalApp}
+            onValueChange={setTerminalApp}
+            items={terminalItems}
+            disabled={settings.terminalTarget !== "external"}
+          />
         </div>
       </section>
     </div>

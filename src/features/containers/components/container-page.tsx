@@ -21,10 +21,12 @@ import { ContainerActions } from "./container-actions"
 import { FilesPanel } from "./files-drawer"
 import { PortList } from "./port-list"
 import { RenameContainerDialog } from "./rename-container-dialog"
+import { TerminalPanel } from "./terminal-panel"
 
 const tabs = [
   { to: ".", label: "Logs", end: true },
   { to: "files", label: "Files" },
+  { to: "terminal", label: "Terminal" },
   { to: "inspect", label: "Inspect" },
 ]
 
@@ -158,6 +160,11 @@ export function ContainerLogsTab() {
 export function ContainerFilesTab() {
   const row = useOutletContext<ContainerRow>()
   return <FilesPanel containerId={row.id} />
+}
+
+export function ContainerTerminalTab() {
+  const row = useOutletContext<ContainerRow>()
+  return <TerminalPanel row={row} />
 }
 
 export function ContainerInspectTab() {

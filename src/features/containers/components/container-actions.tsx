@@ -1,7 +1,11 @@
-import { Pause, Pencil, Play, RotateCw, Square, Trash2 } from "lucide-react"
+import { Pause, Pencil, Play, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 
+import { useSettings } from "@/components/providers"
 import { IconButton } from "@/components/ui/icon-button"
 import { Tooltip } from "@/components/ui/tooltip"
+import { api } from "@/lib/api"
 import type { ContainerRow } from "@/lib/types"
 
 import { useContainerAct } from "../lib/use-container-act"
@@ -17,11 +21,47 @@ export function ContainerActions({
   onRename: () => void
   onRemove: () => void
 }) {
+  const navigate = useNavigate()
+  const { settings } = useSettings()
   const running = row.state === "running"
   const paused = row.state === "paused"
 
+  const canExec = running && !paused
+  const openInDockman = settings.terminalTarget === "embedded"
+
   return (
     <div className="flex items-center">
+      <Tooltip
+        label={
+          canExec
+            ? openInDockman
+              ? "Open terminal in Dockman"
+              : "Open terminal"
+            : paused
+              ? "Unpause the container to open a terminal"
+              : "Start the container to open a terminal"
+        }
+      >
+        <IconButton
+          disabled={!canExec}
+          aria-label="Open terminal"
+          onClick={(event) => {
+            event.stopPropagation()
+            if (openInDockman) {
+              void navigate(`/containers/${row.id}/terminal`)
+              return
+            }
+            void api
+              .containerOpenTerminal(
+                row.id,
+                settings.terminalApp === "auto" ? null : settings.terminalApp,
+              )
+              .catch((error) => toast.error(String(error)))
+          }}
+        >
+          <SquareTerminal size={16} />
+        </IconButton>
+      </Tooltip>
       <Tooltip label={running || paused ? "Stop" : "Start"}>
         <IconButton
           onClick={(event) => {

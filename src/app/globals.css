@@ -78,6 +78,15 @@ button {
   outline-offset: 2px;
 }
 
+[data-terminal] {
+  user-select: text;
+}
+
+[data-terminal] .xterm,
+[data-terminal] .xterm-viewport {
+  height: 100%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

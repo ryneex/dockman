@@ -7,10 +7,13 @@ import {
   type Settings,
   type UiScale,
 } from "@/lib/settings"
+import type { TerminalTarget } from "@/lib/types"
 
 type SettingsContextValue = {
   settings: Settings
   setUiScale: (scale: UiScale) => void
+  setTerminalApp: (terminalApp: string) => void
+  setTerminalTarget: (terminalTarget: TerminalTarget) => void
 }
 
 const SettingsContext = createContext<SettingsContextValue | null>(null)
@@ -24,6 +27,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setUiScale: (uiScale) => {
         const next = { ...settings, uiScale }
         applyUiScale(uiScale)
+        saveSettings(next)
+        setSettings(next)
+      },
+      setTerminalApp: (terminalApp) => {
+        const next = { ...settings, terminalApp }
+        saveSettings(next)
+        setSettings(next)
+      },
+      setTerminalTarget: (terminalTarget) => {
+        const next = { ...settings, terminalTarget }
         saveSettings(next)
         setSettings(next)
       },

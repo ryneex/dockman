@@ -53,7 +53,7 @@ sudo pacman -Rns dockman
 ## Features (v1)
 
 - Dashboard with engine status and resource counts
-- Containers: run, start, stop, pause, restart, rename, remove, logs, inspect, browse files
+- Containers: run, start, stop, pause, restart, rename, remove, logs, inspect, browse files, open a terminal (host app or in Dockman)
 - Run options: command, entrypoint, mounts, network, restart policy, ports, env
 - Images: pull, run as a container, inspect, remove, dangling marker
 - Volumes and networks: create, inspect, remove
@@ -61,8 +61,8 @@ sudo pacman -Rns dockman
 - Usage hints for images, volumes, and networks
 - Live search (`/`), `j`/`k` row movement, `Enter` to inspect
 - Logs: timestamps, filter, copy
-- Settings: text size (compact / default / comfortable)
+- Settings: text size, preferred terminal app, open in host app or Dockman
 
 ## Out of scope
 
-Compose, exec/terminal, image build, image layer history, resource charts, Kubernetes.
+Compose, image build, image layer history, resource charts, Kubernetes.

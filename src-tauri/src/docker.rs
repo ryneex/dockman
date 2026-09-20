@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 
 use bollard::body_full;
-use bollard::exec::StartExecResults;
+use bollard::exec::{ResizeExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::{
-    ContainerCreateBody, ExecConfig, HostConfig, NetworkCreateRequest, PortBinding, RestartPolicy,
-    RestartPolicyNameEnum, VolumeCreateRequest,
+    ContainerCreateBody, ContainerInspectResponse, ExecConfig, HostConfig, NetworkCreateRequest,
+    PortBinding, RestartPolicy, RestartPolicyNameEnum, VolumeCreateRequest,
 };
 use bollard::query_parameters::{
     ContainerArchiveInfoOptionsBuilder, CreateContainerOptionsBuilder, CreateImageOptionsBuilder,
@@ -21,6 +23,7 @@ use bollard::query_parameters::{
 use bollard::Docker;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 use serde::Serialize;
 use tar::{Archive, Builder, Header};
 use tauri::{AppHandle, Emitter, State};
@@ -28,6 +31,29 @@ use tauri::{AppHandle, Emitter, State};
 #[derive(Default)]
 pub struct LogHub {
     tasks: Mutex<HashMap<String, AbortHandle>>,
+}
+
+struct TermSession {
+    abort: AbortHandle,
+    exec_id: String,
+    input: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+}
+
+#[derive(Default)]
+pub struct TermHub {
+    sessions: Mutex<HashMap<String, TermSession>>,
+}
+
+#[derive(Serialize)]
+pub struct HostTerminal {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct TermChunk {
+    pub id: String,
+    pub data: String,
 }
 
 #[derive(Serialize)]
@@ -383,6 +409,412 @@ pub async fn container_rename(id: String, name: String) -> Result<(), String> {
         )
         .await
         .map_err(map_err)
+}
+
+const SHELL_CANDIDATES: &[&str] = &[
+    "/bin/bash",
+    "/bin/sh",
+    "/bin/ash",
+    "/usr/bin/bash",
+    "/usr/bin/sh",
+];
+
+const HOST_TERMINALS: &[&str] = &[
+    "xdg-terminal-exec",
+    "ptyxis",
+    "kgx",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "mate-terminal",
+    "tilix",
+    "kitty",
+    "alacritty",
+    "wezterm",
+    "foot",
+    "ghostty",
+    "xterm",
+];
+
+fn is_safe_docker_ref(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=128).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'_' | b'-' | b'.' | b'/' | b':'))
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|meta| meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+fn resolve_bin(name: &str) -> Option<PathBuf> {
+    if name.contains('/') {
+        let path = PathBuf::from(name);
+        return (path.is_file() && is_executable(&path)).then_some(path);
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        let candidate = dir.join(name);
+        (candidate.is_file() && is_executable(&candidate)).then_some(candidate)
+    })
+}
+
+fn docker_cli() -> Result<PathBuf, String> {
+    resolve_bin("docker")
+        .or_else(|| resolve_bin("/usr/bin/docker"))
+        .ok_or_else(|| {
+            "Could not find the docker CLI. Install docker to open a container terminal.".into()
+        })
+}
+
+fn docker_exec_argv(docker: &str, id: &str, shell: &str) -> Vec<String> {
+    vec![
+        docker.to_string(),
+        "exec".into(),
+        "-it".into(),
+        "--".into(),
+        id.to_string(),
+        shell.to_string(),
+    ]
+}
+
+fn terminal_args_for(launcher: &str, exec: &[String]) -> Vec<String> {
+    let mut args = match launcher {
+        "xdg-terminal-exec" | "foot" => vec!["--".into()],
+        "kitty" => vec!["--detach".into(), "--".into()],
+        "wezterm" => vec!["start".into(), "--".into()],
+        "ptyxis" | "kgx" | "gnome-terminal" => vec!["--".into()],
+        "xfce4-terminal" | "mate-terminal" => vec!["-x".into()],
+        _ => vec!["-e".into()],
+    };
+    args.extend(exec.iter().cloned());
+    args
+}
+
+fn terminal_label(name: &str) -> String {
+    match name {
+        "xdg-terminal-exec" => "Desktop default".into(),
+        "ptyxis" => "Ptyxis".into(),
+        "kgx" => "GNOME Console".into(),
+        "gnome-terminal" => "GNOME Terminal".into(),
+        "konsole" => "Konsole".into(),
+        "xfce4-terminal" => "XFCE Terminal".into(),
+        "mate-terminal" => "MATE Terminal".into(),
+        "tilix" => "Tilix".into(),
+        "kitty" => "kitty".into(),
+        "alacritty" => "Alacritty".into(),
+        "wezterm" => "WezTerm".into(),
+        "foot" => "foot".into(),
+        "ghostty" => "Ghostty".into(),
+        "xterm" => "xterm".into(),
+        other => other.to_string(),
+    }
+}
+
+fn pick_host_terminal(preferred: Option<&str>) -> Result<(PathBuf, String), String> {
+    if let Some(name) = preferred
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && *name != "auto")
+    {
+        if !is_safe_docker_ref(name) {
+            return Err("Invalid terminal".into());
+        }
+        if let Some(path) = resolve_bin(name) {
+            let kind = path
+                .file_name()
+                .and_then(|file| file.to_str())
+                .unwrap_or(name)
+                .to_string();
+            return Ok((path, kind));
+        }
+        return Err(format!("{name} is not installed."));
+    }
+    if let Ok(value) = std::env::var("TERMINAL") {
+        let value = value.trim();
+        if !value.is_empty() && !value.contains(char::is_whitespace) {
+            if let Some(path) = resolve_bin(value) {
+                let kind = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(value)
+                    .to_string();
+                return Ok((path, kind));
+            }
+        }
+    }
+    for name in HOST_TERMINALS {
+        if let Some(path) = resolve_bin(name) {
+            return Ok((path, (*name).to_string()));
+        }
+    }
+    Err("No terminal app found. Install a terminal or set the TERMINAL environment variable.".into())
+}
+
+fn spawn_container_terminal(id: &str, shell: &str, preferred: Option<&str>) -> Result<(), String> {
+    if !is_safe_docker_ref(id) || !is_safe_docker_ref(shell) {
+        return Err("Invalid container or shell path".into());
+    }
+    let docker = docker_cli()?;
+    let (term, kind) = pick_host_terminal(preferred)?;
+    let exec = docker_exec_argv(&docker.to_string_lossy(), id, shell);
+    let args = terminal_args_for(&kind, &exec);
+    let mut cmd = if let Some(setsid) = resolve_bin("setsid") {
+        let mut cmd = Command::new(setsid);
+        cmd.arg(&term);
+        cmd
+    } else {
+        Command::new(&term)
+    };
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("Could not open a terminal: {err}"))?;
+    Ok(())
+}
+
+fn inspect_shell(inspect: &ContainerInspectResponse) -> Option<String> {
+    inspect
+        .config
+        .as_ref()?
+        .env
+        .as_ref()?
+        .iter()
+        .find_map(|entry| entry.strip_prefix("SHELL="))
+        .map(str::trim)
+        .filter(|value| value.starts_with('/') && is_safe_docker_ref(value))
+        .map(ToString::to_string)
+}
+
+async fn container_path_exists(docker: &Docker, id: &str, path: &str) -> bool {
+    docker
+        .get_container_archive_info(
+            id,
+            Some(
+                ContainerArchiveInfoOptionsBuilder::default()
+                    .path(path)
+                    .build(),
+            ),
+        )
+        .await
+        .is_ok()
+}
+
+async fn detect_container_shell(
+    docker: &Docker,
+    id: &str,
+    inspect: &ContainerInspectResponse,
+) -> Result<String, String> {
+    let mut candidates = Vec::new();
+    if let Some(shell) = inspect_shell(inspect) {
+        candidates.push(shell);
+    }
+    for shell in SHELL_CANDIDATES {
+        if !candidates.iter().any(|existing| existing == shell) {
+            candidates.push((*shell).to_string());
+        }
+    }
+    for shell in candidates {
+        if container_path_exists(docker, id, &shell).await {
+            return Ok(shell);
+        }
+    }
+    Err("This image has no shell, so a terminal cannot be opened.".into())
+}
+
+async fn ready_container_shell(id: &str) -> Result<(Docker, String), String> {
+    if !is_safe_docker_ref(id) {
+        return Err("Invalid container".into());
+    }
+    let docker = docker()?;
+    let inspect = docker.inspect_container(id, None).await.map_err(map_err)?;
+    let running = inspect
+        .state
+        .as_ref()
+        .and_then(|state| state.running)
+        .unwrap_or(false);
+    let paused = inspect
+        .state
+        .as_ref()
+        .and_then(|state| state.paused)
+        .unwrap_or(false);
+    if !running {
+        return Err("Start the container to open a terminal.".into());
+    }
+    if paused {
+        return Err("Unpause the container to open a terminal.".into());
+    }
+    let shell = detect_container_shell(&docker, id, &inspect).await?;
+    Ok((docker, shell))
+}
+
+#[tauri::command]
+pub fn list_host_terminals() -> Vec<HostTerminal> {
+    HOST_TERMINALS
+        .iter()
+        .filter_map(|name| {
+            resolve_bin(name).map(|_| HostTerminal {
+                id: (*name).to_string(),
+                label: terminal_label(name),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn container_open_terminal(id: String, terminal: Option<String>) -> Result<(), String> {
+    let id = id.trim().to_string();
+    let preferred = terminal.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let (_docker, shell) = ready_container_shell(&id).await?;
+    spawn_container_terminal(&id, &shell, preferred)
+}
+
+#[tauri::command]
+pub async fn container_term_start(
+    app: AppHandle,
+    hub: State<'_, TermHub>,
+    id: String,
+) -> Result<(), String> {
+    let id = id.trim().to_string();
+    let (docker, shell) = ready_container_shell(&id).await?;
+    let exec = docker
+        .create_exec(
+            &id,
+            ExecConfig {
+                attach_stdin: Some(true),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                tty: Some(true),
+                env: Some(vec!["TERM=xterm-256color".into()]),
+                cmd: Some(vec![shell]),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(map_err)?
+        .id;
+    let StartExecResults::Attached {
+        mut output,
+        mut input,
+    } = docker
+        .start_exec(
+            &exec,
+            Some(StartExecOptions {
+                tty: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(map_err)?
+    else {
+        return Err("Could not attach to exec".into());
+    };
+
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (abort_handle, abort_reg) = AbortHandle::new_pair();
+    {
+        let mut sessions = hub.sessions.lock().map_err(|err| err.to_string())?;
+        if let Some(prev) = sessions.insert(
+            id.clone(),
+            TermSession {
+                abort: abort_handle,
+                exec_id: exec,
+                input: input_tx,
+            },
+        ) {
+            prev.abort.abort();
+        }
+    }
+
+    let stream_id = id.clone();
+    tauri::async_runtime::spawn(async move {
+        let read = async {
+            while let Some(item) = output.next().await {
+                match item {
+                    Ok(msg) => {
+                        let _ = app.emit(
+                            "container-term",
+                            TermChunk {
+                                id: stream_id.clone(),
+                                data: msg.to_string(),
+                            },
+                        );
+                    }
+                    Err(_) => break,
+                }
+            }
+        };
+        let write = async {
+            while let Some(bytes) = input_rx.recv().await {
+                if input.write_all(&bytes).await.is_err() {
+                    break;
+                }
+                let _ = input.flush().await;
+            }
+        };
+        let work = async {
+            futures_util::future::select(Box::pin(read), Box::pin(write)).await;
+        };
+        let _ = Abortable::new(work, abort_reg).await;
+        let _ = app.emit("container-term-end", stream_id);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn container_term_write(hub: State<'_, TermHub>, id: String, data: String) -> Result<(), String> {
+    let tx = {
+        let sessions = hub.sessions.lock().map_err(|err| err.to_string())?;
+        sessions
+            .get(&id)
+            .map(|session| session.input.clone())
+            .ok_or_else(|| "No terminal session".to_string())?
+    };
+    tx.send(data.into_bytes())
+        .map_err(|_| "Terminal session has closed".to_string())
+}
+
+#[tauri::command]
+pub async fn container_term_resize(
+    hub: State<'_, TermHub>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    if cols == 0 || rows == 0 {
+        return Ok(());
+    }
+    let exec_id = {
+        let sessions = hub.sessions.lock().map_err(|err| err.to_string())?;
+        sessions
+            .get(&id)
+            .map(|session| session.exec_id.clone())
+            .ok_or_else(|| "No terminal session".to_string())?
+    };
+    docker()?
+        .resize_exec(
+            &exec_id,
+            ResizeExecOptions {
+                height: rows,
+                width: cols,
+            },
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn container_term_stop(hub: State<'_, TermHub>, id: String) -> Result<(), String> {
+    let mut sessions = hub.sessions.lock().map_err(|err| err.to_string())?;
+    if let Some(session) = sessions.remove(&id) {
+        session.abort.abort();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1258,8 +1690,9 @@ pub async fn image_search(term: String) -> Result<Vec<ImageSearchRow>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        first_child, hub_search_term, list_tar_children, parent_and_name, parse_dir_list,
-        parse_mount_line, parse_restart, read_tar_file,
+        docker_exec_argv, first_child, hub_search_term, is_safe_docker_ref, list_tar_children,
+        parent_and_name, parse_dir_list, parse_mount_line, parse_restart, read_tar_file,
+        terminal_args_for, terminal_label,
     };
 
     #[test]
@@ -1373,6 +1806,45 @@ mod tests {
         assert_eq!(rows[0].kind, "dir");
         assert_eq!(rows[1].kind, "file");
         assert_eq!(rows[1].size, 3);
+    }
+
+    #[test]
+    fn is_safe_docker_ref_rejects_injection() {
+        assert!(is_safe_docker_ref("abc123def456"));
+        assert!(is_safe_docker_ref("my-app"));
+        assert!(is_safe_docker_ref("/bin/bash"));
+        assert!(!is_safe_docker_ref(""));
+        assert!(!is_safe_docker_ref("id;rm -rf /"));
+        assert!(!is_safe_docker_ref("a b"));
+    }
+
+    #[test]
+    fn terminal_args_keep_docker_exec_as_argv() {
+        let exec = docker_exec_argv("/usr/bin/docker", "abc", "/bin/sh");
+        assert_eq!(
+            terminal_args_for("xdg-terminal-exec", &exec),
+            ["--", "/usr/bin/docker", "exec", "-it", "--", "abc", "/bin/sh"]
+        );
+        assert_eq!(
+            terminal_args_for("gnome-terminal", &exec)[..2],
+            ["--", "/usr/bin/docker"]
+        );
+        assert_eq!(
+            terminal_args_for("kitty", &exec)[..2],
+            ["--detach", "--"]
+        );
+        assert_eq!(terminal_args_for("konsole", &exec)[0], "-e");
+        assert_eq!(
+            terminal_args_for("wezterm", &exec)[..2],
+            ["start", "--"]
+        );
+    }
+
+    #[test]
+    fn terminal_label_uses_friendly_names() {
+        assert_eq!(terminal_label("kgx"), "GNOME Console");
+        assert_eq!(terminal_label("kitty"), "kitty");
+        assert_eq!(terminal_label("weirdterm"), "weirdterm");
     }
 }
 

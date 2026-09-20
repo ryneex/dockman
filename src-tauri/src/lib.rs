@@ -5,6 +5,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(docker::LogHub::default())
+        .manage(docker::TermHub::default())
         .invoke_handler(tauri::generate_handler![
             docker::engine_info,
             docker::list_containers,
@@ -14,6 +15,12 @@ pub fn run() {
             docker::container_pause,
             docker::container_unpause,
             docker::container_rename,
+            docker::container_open_terminal,
+            docker::list_host_terminals,
+            docker::container_term_start,
+            docker::container_term_write,
+            docker::container_term_resize,
+            docker::container_term_stop,
             docker::container_remove,
             docker::container_inspect,
             docker::container_logs,

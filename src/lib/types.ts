@@ -43,6 +43,18 @@ export type PruneResult = {
 
 export type RestartPolicy = "no" | "on-failure" | "always" | "unless-stopped"
 
+export type TerminalTarget = "external" | "embedded"
+
+export type HostTerminal = {
+  id: string
+  label: string
+}
+
+export type TermChunk = {
+  id: string
+  data: string
+}
+
 export type ImageSearchRow = {
   name: string
   description: string
