@@ -4,6 +4,7 @@ import {
   ContainerFilesTab,
   ContainerInspectTab,
   ContainerLogsTab,
+  ContainerOverviewTab,
   ContainerPage,
   ContainerTerminalTab,
   ContainersPage,
@@ -22,7 +23,8 @@ export function AppRoutes() {
       <Route path="/" element={<DashboardPage />} />
       <Route path="/containers" element={<ContainersPage />} />
       <Route path="/containers/:id" element={<ContainerPage />}>
-        <Route index element={<ContainerLogsTab />} />
+        <Route index element={<ContainerOverviewTab />} />
+        <Route path="logs" element={<ContainerLogsTab />} />
         <Route path="files" element={<ContainerFilesTab />} />
         <Route path="terminal" element={<ContainerTerminalTab />} />
         <Route path="inspect" element={<ContainerInspectTab />} />

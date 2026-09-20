@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog"
 import { motion } from "framer-motion"
 import { Loader2, X } from "lucide-react"
-import type { FormEvent, ReactElement, ReactNode } from "react"
+import type { ChangeEvent, ReactElement, ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { motionOrInstant, panel } from "@/lib/motion"
@@ -12,6 +12,7 @@ export function FormDialog({
   title,
   description,
   confirmLabel = "Create",
+  pendingLabel = "Working…",
   confirmIcon,
   pending,
   error,
@@ -26,17 +27,18 @@ export function FormDialog({
   title: string
   description?: string
   confirmLabel?: string
+  pendingLabel?: string
   confirmIcon?: ReactNode
   pending?: boolean
   error?: string | null
   wide?: boolean
   trigger?: ReactElement
   aside?: ReactNode
-  onSubmit: (event: FormEvent) => void
+  onSubmit: (event: ChangeEvent) => void
   onOpenChange: (open: boolean) => void
   children: ReactNode
 }) {
-  function handleSubmit(event: FormEvent) {
+  function handleSubmit(event: ChangeEvent) {
     if (pending) {
       event.preventDefault()
       return
@@ -96,7 +98,7 @@ export function FormDialog({
                   icon={pending ? <Loader2 className="animate-spin" /> : confirmIcon}
                   disabled={pending}
                 >
-                  {pending ? "Working…" : confirmLabel}
+                  {pending ? pendingLabel : confirmLabel}
                 </Button>
               </div>
             </form>

@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Play, Plus } from "lucide-react"
+import { Loader2, Play, Plus } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { Controller, useForm, useWatch } from "react-hook-form"
 
@@ -12,7 +12,7 @@ import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
 import { parseLines, RunContainer, type RunContainerValues } from "@/lib/create-form"
 import { filterLocalImageTags, hubSearchTerm } from "@/lib/hub-search"
-import { exposedPortsFromInspect, resolveLocalImage } from "@/lib/image-hints"
+import { cmdFromInspect, exposedPortsFromInspect, resolveLocalImage } from "@/lib/image-hints"
 import { useImageInspect, useImages, useNetworks } from "@/lib/queries"
 import type { ImageSearchRow, RestartPolicy } from "@/lib/types"
 import { useImageSearch } from "@/lib/use-image-search"
@@ -28,7 +28,6 @@ const emptyValues: RunContainerValues = {
   image: "",
   name: "",
   cmd: "",
-  entrypoint: "",
   ports: "",
   mounts: "",
   env: "",
@@ -40,21 +39,65 @@ const emptyValues: RunContainerValues = {
 export function RunContainerDialog({
   open,
   initialImage = "",
+  initialValues,
+  replaceId,
   trigger,
   onOpenChange,
+  onCreated,
 }: {
   open: boolean
   initialImage?: string
+  initialValues?: RunContainerValues | null
+  replaceId?: string | null
   trigger?: boolean
   onOpenChange: (open: boolean) => void
+  onCreated?: (id: string) => void
 }) {
   const images = useImages()
   const networks = useNetworks()
   const client = useQueryClient()
   const listId = useId()
   const [progress, setProgress] = useState<string[]>([])
+  const [status, setStatus] = useState<string | null>(null)
+  const [pendingLabel, setPendingLabel] = useState("Working…")
   const [pickedTerm, setPickedTerm] = useState<string | null>(null)
   const [active, setActive] = useState(-1)
+
+  function log(line: string) {
+    setProgress((current) => current.concat(line))
+  }
+
+  async function runStep<T>(
+    label: string,
+    task: () => Promise<T>,
+    opts?: { tick?: boolean; limit?: number; pending?: string },
+  ) {
+    const started = Date.now()
+    const pending = opts?.pending ?? label
+    setPendingLabel(pending)
+    const format = (secs: number) => {
+      if (!opts?.tick) return label
+      return opts.limit ? `${label} ${secs}s / ${opts.limit}s` : `${label} ${secs}s`
+    }
+    setStatus(format(0))
+    const timer = opts?.tick
+      ? window.setInterval(() => {
+          setStatus(format(Math.floor((Date.now() - started) / 1000)))
+        }, 250)
+      : undefined
+    try {
+      const result = await task()
+      const secs = Math.floor((Date.now() - started) / 1000)
+      const done = label.replace(/…$/, "").trim()
+      log(secs > 0 ? `${done} (${secs}s)` : done)
+      return result
+    } catch (error) {
+      setStatus(null)
+      throw error
+    } finally {
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }
 
   const form = useForm({
     resolver: zodResolver(RunContainer),
@@ -62,13 +105,17 @@ export function RunContainerDialog({
   })
   const image = useWatch({ control: form.control, name: "image" })
   const start = useWatch({ control: form.control, name: "start" })
+  const cmd = useWatch({ control: form.control, name: "cmd" })
   const ports = useWatch({ control: form.control, name: "ports" })
   const localImage = useMemo(() => resolveLocalImage(images.data, image), [image, images.data])
   const inspect = useImageInspect(localImage?.id ?? null, open)
   const suggestedPorts = useMemo(() => exposedPortsFromInspect(inspect.data), [inspect.data])
   const suggestedText = suggestedPorts.join("\n")
-  const lastSuggestion = useRef("")
+  const suggestedCmd = useMemo(() => cmdFromInspect(inspect.data).join("\n"), [inspect.data])
+  const lastPorts = useRef("")
+  const lastCmd = useRef("")
   const lastImageId = useRef<string | null>(null)
+  const logRef = useRef<HTMLDivElement>(null)
 
   const { mutate, isPending, error, reset } = useMutation({
     mutationFn: async (values: RunContainerValues) => {
@@ -88,41 +135,83 @@ export function RunContainerDialog({
           })
         })
         try {
-          await api.imagePull(imageRef)
+          await runStep("Pulling image…", () => api.imagePull(imageRef), { pending: "Pulling…" })
         } finally {
           unlisten()
         }
         await client.invalidateQueries({ queryKey: ["images"] })
       }
-      await api.containerCreate({
-        image: imageRef,
-        name: values.name.trim() || undefined,
-        ports: parseLines(values.ports),
-        env: parseLines(values.env),
-        cmd: parseLines(values.cmd),
-        entrypoint: parseLines(values.entrypoint),
-        mounts: parseLines(values.mounts),
-        network: values.network || undefined,
-        restart: values.restart,
-        start: values.start,
-      })
+      if (replaceId) {
+        try {
+          await runStep("Stopping container…", () => api.containerStop(replaceId), {
+            tick: true,
+            limit: 10,
+            pending: "Stopping…",
+          })
+        } catch {
+          log("Already stopped")
+        }
+        try {
+          await runStep("Removing container…", () => api.containerRemove(replaceId), {
+            pending: "Removing…",
+          })
+        } catch (error) {
+          if (!String(error).toLowerCase().includes("no such")) throw error
+          log("Already removed")
+        }
+      }
+      return runStep(
+        values.start ? "Creating and starting…" : "Creating container…",
+        () =>
+          api.containerCreate({
+            image: imageRef,
+            name: values.name.trim() || undefined,
+            ports: parseLines(values.ports),
+            env: parseLines(values.env),
+            cmd: parseLines(values.cmd),
+            entrypoint: [],
+            mounts: parseLines(values.mounts),
+            network: values.network || undefined,
+            restart: values.restart,
+            start: values.start,
+          }),
+        { pending: values.start ? "Starting…" : "Creating…" },
+      )
     },
-    onSuccess: async () => {
+    onSuccess: async (id) => {
+      setStatus(null)
+      setPendingLabel("Working…")
       await client.invalidateQueries({ queryKey: ["containers"] })
+      await client.invalidateQueries({ queryKey: ["engine"] })
       onOpenChange(false)
+      onCreated?.(id)
+    },
+    onError: async () => {
+      setStatus(null)
+      setPendingLabel("Working…")
+      await client.invalidateQueries({ queryKey: ["containers"] })
+      await client.invalidateQueries({ queryKey: ["engine"] })
     },
   })
 
   useEffect(() => {
     if (!open) return
-    form.reset({ ...emptyValues, image: initialImage })
+    form.reset({
+      ...emptyValues,
+      image: initialImage,
+      ...initialValues,
+    })
     setProgress([])
-    setPickedTerm(initialImage.trim() ? hubSearchTerm(initialImage) : null)
+    setStatus(null)
+    setPendingLabel("Working…")
+    const imageRef = initialValues?.image || initialImage
+    setPickedTerm(imageRef.trim() ? hubSearchTerm(imageRef) : null)
     setActive(-1)
-    lastSuggestion.current = ""
+    lastPorts.current = initialValues?.ports ?? ""
+    lastCmd.current = initialValues?.cmd ?? ""
     lastImageId.current = null
     reset()
-  }, [form, initialImage, open, reset])
+  }, [form, initialImage, initialValues, open, reset])
 
   useEffect(() => {
     if (!open) {
@@ -130,17 +219,24 @@ export function RunContainerDialog({
       return
     }
     const id = localImage?.id ?? null
-    if (id !== lastImageId.current) {
-      lastImageId.current = id
-      form.setValue("ports", suggestedText)
-      lastSuggestion.current = suggestedText
-      return
+    if (!id || !inspect.data) return
+
+    const imageChanged = id !== lastImageId.current
+    if (imageChanged) lastImageId.current = id
+
+    const currentCmd = form.getValues("cmd")
+    if (imageChanged || !currentCmd.trim() || currentCmd === lastCmd.current) {
+      form.setValue("cmd", suggestedCmd)
+      lastCmd.current = suggestedCmd
     }
-    const current = form.getValues("ports")
-    if (current.trim() && current !== lastSuggestion.current) return
-    form.setValue("ports", suggestedText)
-    lastSuggestion.current = suggestedText
-  }, [form, localImage?.id, open, suggestedText])
+
+    if (replaceId) return
+    const currentPorts = form.getValues("ports")
+    if (imageChanged || !currentPorts.trim() || currentPorts === lastPorts.current) {
+      form.setValue("ports", suggestedText)
+      lastPorts.current = suggestedText
+    }
+  }, [form, inspect.data, localImage?.id, open, replaceId, suggestedCmd, suggestedText])
 
   const tags = useMemo(() => (images.data ?? []).flatMap((row) => row.tags), [images.data])
   const term = hubSearchTerm(image)
@@ -162,10 +258,17 @@ export function RunContainerDialog({
     setActive(-1)
   }, [image, results, showPanel])
 
+  useEffect(() => {
+    const node = logRef.current
+    if (node) node.scrollTop = node.scrollHeight
+  }, [progress, status])
+
   function selectLocal(tag: string) {
     form.setValue("image", tag, { shouldValidate: true })
     form.setValue("ports", "")
-    lastSuggestion.current = ""
+    form.setValue("cmd", "")
+    lastPorts.current = ""
+    lastCmd.current = ""
     lastImageId.current = null
     setPickedTerm(hubSearchTerm(tag))
     setActive(-1)
@@ -174,7 +277,9 @@ export function RunContainerDialog({
   function selectHub(row: ImageSearchRow) {
     form.setValue("image", row.name, { shouldValidate: true })
     form.setValue("ports", "")
-    lastSuggestion.current = ""
+    form.setValue("cmd", "")
+    lastPorts.current = ""
+    lastCmd.current = ""
     lastImageId.current = null
     setPickedTerm(row.name)
     setActive(-1)
@@ -198,9 +303,14 @@ export function RunContainerDialog({
   return (
     <FormDialog
       open={open}
-      title="Run container"
-      description="Create a container from an image. Missing images are pulled from the public registry."
-      confirmLabel={start ? "Run" : "Create"}
+      title={replaceId ? "Recreate container" : "Run container"}
+      description={
+        replaceId
+          ? "This replaces the current container with the same name. The writable layer is lost; listed binds and volumes stay."
+          : "Create a container from an image. Missing images are pulled from the public registry."
+      }
+      confirmLabel={replaceId ? "Recreate" : start ? "Run" : "Create"}
+      pendingLabel={pendingLabel}
       confirmIcon={start ? <Play /> : <Plus />}
       pending={isPending}
       error={error ? String(error) : null}
@@ -286,46 +396,30 @@ export function RunContainerDialog({
           onSelectHub={selectHub}
         />
       ) : null}
-      <FieldPair
-        left={{
-          label: "Command",
-          hint: "One argument per line. Overrides image CMD.",
-          errors: [form.formState.errors.cmd],
-          children: (
-            <Controller
-              name="cmd"
-              control={form.control}
-              render={({ field, fieldState }) => (
-                <TextArea
-                  {...field}
-                  placeholder={"nginx -g daemon off;"}
-                  className="min-h-20"
-                  aria-invalid={fieldState.invalid}
-                />
-              )}
+      <Field
+        label="Command"
+        hint={
+          suggestedCmd
+            ? cmd === suggestedCmd
+              ? "Image CMD. One argument per line; clear to keep the image default."
+              : "One argument per line. Overrides image CMD."
+            : "One argument per line. Filled from the image CMD when a local image is selected."
+        }
+        errors={[form.formState.errors.cmd]}
+      >
+        <Controller
+          name="cmd"
+          control={form.control}
+          render={({ field, fieldState }) => (
+            <TextArea
+              {...field}
+              placeholder="nginx"
+              className="min-h-20"
+              aria-invalid={fieldState.invalid}
             />
-          ),
-        }}
-        right={{
-          label: "Entrypoint",
-          hint: "One argument per line. Overrides image ENTRYPOINT.",
-          errors: [form.formState.errors.entrypoint],
-          children: (
-            <Controller
-              name="entrypoint"
-              control={form.control}
-              render={({ field, fieldState }) => (
-                <TextArea
-                  {...field}
-                  placeholder="/docker-entrypoint.sh"
-                  className="min-h-20"
-                  aria-invalid={fieldState.invalid}
-                />
-              )}
-            />
-          ),
-        }}
-      />
+          )}
+        />
+      </Field>
       <FieldPair
         left={{
           label: "Ports",
@@ -340,7 +434,7 @@ export function RunContainerDialog({
                   className="text-accent hover:underline"
                   onClick={() => {
                     form.setValue("ports", suggestedText, { shouldValidate: true })
-                    lastSuggestion.current = suggestedText
+                    lastPorts.current = suggestedText
                   }}
                 >
                   Use
@@ -401,6 +495,9 @@ export function RunContainerDialog({
                   onValueChange={field.onChange}
                   items={[
                     { value: "", label: "Default" },
+                    ...["host", "none"]
+                      .filter((name) => !networkChoices.some((row) => row.name === name))
+                      .map((name) => ({ value: name, label: name })),
                     ...networkChoices.map((row) => ({ value: row.name, label: row.name })),
                   ]}
                 />
@@ -440,10 +537,23 @@ export function RunContainerDialog({
           </Field>
         )}
       />
-      {progress.length ? (
-        <pre className="border-border bg-canvas text-muted max-h-28 overflow-auto rounded-[10px] border p-3 font-mono text-xs">
-          {progress.join("\n")}
-        </pre>
+      {status || progress.length ? (
+        <div
+          ref={logRef}
+          role="status"
+          aria-live="polite"
+          className="border-border bg-canvas text-muted max-h-28 overflow-auto rounded-[10px] border p-3 font-mono text-xs"
+        >
+          {progress.map((line, index) => (
+            <p key={`${index}-${line}`}>{line}</p>
+          ))}
+          {status ? (
+            <p className="text-ink flex items-center gap-2">
+              <Loader2 className="size-3.5 shrink-0 animate-spin" />
+              {status}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </FormDialog>
   )

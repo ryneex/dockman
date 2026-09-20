@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, File, Folder, Link2, Save } from "lucide-react"
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -115,7 +115,7 @@ export function FilesPanel({ containerId }: { containerId: string }) {
     setFilePath(normalizePath(next))
   }
 
-  function onPathSubmit(event: FormEvent) {
+  function onPathSubmit(event: ChangeEvent) {
     event.preventDefault()
     goDir(pathDraft)
   }

@@ -38,11 +38,27 @@ function portKeys(raw: unknown) {
   return []
 }
 
-function configPorts(inspect: unknown) {
-  if (!isRecord(inspect)) return []
+function configOf(inspect: unknown) {
+  if (!isRecord(inspect)) return null
   const config = inspect.Config ?? inspect.config
-  if (!isRecord(config)) return []
+  return isRecord(config) ? config : null
+}
+
+function configPorts(inspect: unknown) {
+  const config = configOf(inspect)
+  if (!config) return []
   return portKeys(config.ExposedPorts ?? config.exposed_ports)
+}
+
+export function cmdFromInspect(inspect: unknown) {
+  const config = configOf(inspect)
+  if (!config) return []
+  const raw = config.Cmd ?? config.cmd
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is string => typeof item === "string" && item.length > 0)
+  }
+  if (typeof raw === "string" && raw) return [raw]
+  return []
 }
 
 export function exposedPortsFromInspect(inspect: unknown) {

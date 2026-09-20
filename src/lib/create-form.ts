@@ -32,7 +32,6 @@ export const RunContainer = z.object({
   image: z.string().trim().min(1, "Image is required"),
   name: z.string(),
   cmd: z.string(),
-  entrypoint: z.string(),
   ports: z.string().superRefine((text, ctx) => {
     refineLines(
       text,

@@ -1,7 +1,9 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
+import { RotateCw } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
+import { Button } from "@/components/ui/button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { api, listenContainerTerm } from "@/lib/api"
 import type { ContainerRow } from "@/lib/types"
@@ -11,7 +13,15 @@ import "@xterm/xterm/css/xterm.css"
 export function TerminalPanel({ row }: { row: ContainerRow }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const [session, setSession] = useState(0)
+  const [ended, setEnded] = useState(false)
   const running = row.state === "running"
+
+  useEffect(() => {
+    return () => {
+      void api.containerTermStop(row.id)
+    }
+  }, [row.id, running])
 
   useEffect(() => {
     const el = host.current
@@ -21,6 +31,8 @@ export function TerminalPanel({ row }: { row: ContainerRow }) {
     let term: Terminal | undefined
     let unlisten: (() => void) | undefined
     const fit = new FitAddon()
+    setError(null)
+    setEnded(false)
 
     const start = async () => {
       term = new Terminal({
@@ -44,7 +56,10 @@ export function TerminalPanel({ row }: { row: ContainerRow }) {
           term?.write(chunk.data)
         },
         (id) => {
-          if (id === row.id) term?.write("\r\n[session ended]\r\n")
+          if (id === row.id) {
+            term?.write("\r\n[session ended]\r\n")
+            if (!disposed) setEnded(true)
+          }
         },
       )
       if (disposed) {
@@ -77,9 +92,8 @@ export function TerminalPanel({ row }: { row: ContainerRow }) {
       observer.disconnect()
       unlisten?.()
       term?.dispose()
-      void api.containerTermStop(row.id)
     }
-  }, [row.id, running])
+  }, [row.id, running, session])
 
   if (!running) {
     return (
@@ -89,6 +103,19 @@ export function TerminalPanel({ row }: { row: ContainerRow }) {
 
   return (
     <div className="bg-canvas flex h-full min-h-0 flex-col">
+      <div className="border-border flex items-center justify-between gap-2 border-b px-3 py-2">
+        <p className="text-muted text-sm">{ended ? "Session ended" : "Shell"}</p>
+        <Button
+          icon={<RotateCw />}
+          onClick={() => {
+            setError(null)
+            setEnded(false)
+            setSession((current) => current + 1)
+          }}
+        >
+          Restart
+        </Button>
+      </div>
       {error ? <p className="text-muted px-4 py-3 text-sm">{error}</p> : null}
       <div ref={host} data-terminal className="min-h-0 flex-1 px-3 py-2" />
     </div>

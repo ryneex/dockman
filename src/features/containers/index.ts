@@ -3,6 +3,7 @@ export {
   ContainerFilesTab,
   ContainerInspectTab,
   ContainerLogsTab,
+  ContainerOverviewTab,
   ContainerTerminalTab,
 } from "./components/container-page"
 export { ContainersPage } from "./components/containers-page"

@@ -1085,6 +1085,12 @@ const ROOT_CANDIDATES: &[&str] = &[
     "app", "bin", "boot", "data", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt",
     "proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
 ];
+const ROOT_FILE_CANDIDATES: &[&str] = &[
+    "docker-entrypoint.sh",
+    "entrypoint.sh",
+    "init.sh",
+    "start.sh",
+];
 
 fn normalize_image_ref(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
@@ -1577,18 +1583,7 @@ async fn list_root(docker: &Docker, id: &str) -> Result<Vec<FsEntry>, String> {
     let mut rows = Vec::new();
     for name in ROOT_CANDIDATES {
         let path = format!("/{name}");
-        if docker
-            .get_container_archive_info(
-                id,
-                Some(
-                    ContainerArchiveInfoOptionsBuilder::default()
-                        .path(&path)
-                        .build(),
-                ),
-            )
-            .await
-            .is_ok()
-        {
+        if container_path_exists(docker, id, &path).await {
             rows.push(FsEntry {
                 name: (*name).to_string(),
                 path,
@@ -1597,7 +1592,18 @@ async fn list_root(docker: &Docker, id: &str) -> Result<Vec<FsEntry>, String> {
             });
         }
     }
-    Ok(rows)
+    for name in ROOT_FILE_CANDIDATES {
+        let path = format!("/{name}");
+        if container_path_exists(docker, id, &path).await {
+            rows.push(FsEntry {
+                name: (*name).to_string(),
+                path,
+                kind: "file".into(),
+                size: 0,
+            });
+        }
+    }
+    Ok(sort_fs_entries(rows))
 }
 
 #[tauri::command]
