@@ -1,5 +1,5 @@
+mod compose;
 mod docker;
-mod stacks;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -59,14 +59,14 @@ pub fn run() {
             docker::container_fs_list,
             docker::container_fs_read,
             docker::container_fs_write,
-            stacks::compose_available,
-            stacks::stack_list,
-            stacks::stack_create,
-            stacks::stack_read,
-            stacks::stack_write,
-            stacks::stack_delete,
-            stacks::stack_up,
-            stacks::stack_down,
+            compose::compose_available,
+            compose::stack_list,
+            compose::stack_create,
+            compose::stack_read,
+            compose::stack_write,
+            compose::stack_delete,
+            compose::stack_up,
+            compose::stack_down,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
