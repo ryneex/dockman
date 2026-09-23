@@ -21,6 +21,7 @@ bollard = "0.21"
 futures-util = "0.3"
 tokio = { version = "1", features = ["io-util", "sync"] }
 tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [profile.release]
 codegen-units = 1

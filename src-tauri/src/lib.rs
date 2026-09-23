@@ -7,6 +7,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(docker::LogHub::default())
         .manage(docker::TermHub::default())
+        .manage(docker::LayerDiffCache::default())
         .invoke_handler(tauri::generate_handler![
             docker::engine_info,
             docker::list_containers,
@@ -28,6 +29,9 @@ pub fn run() {
             docker::container_logs_stop,
             docker::list_images,
             docker::image_inspect,
+            docker::image_history,
+            docker::image_layer_diffs,
+            docker::image_layer_file,
             docker::image_remove,
             docker::list_volumes,
             docker::volume_inspect,

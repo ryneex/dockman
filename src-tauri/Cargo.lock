@@ -853,6 +853,7 @@ name = "dockman"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "flate2",
  "futures-util",
  "serde",
  "serde_json",

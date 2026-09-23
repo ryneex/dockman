@@ -42,6 +42,47 @@ export type ImageRow = {
   used_by: UsageRef[]
 }
 
+export type ImageHistoryRow = {
+  created_by: string
+  size: number
+  created: number
+  empty: boolean
+  id?: string | null
+  comment?: string | null
+}
+
+export type LayerChangeKind = "added" | "modified" | "deleted"
+
+export type FileKind = LayerChangeKind | "unchanged"
+
+export type LayerChange = {
+  path: string
+  kind: LayerChangeKind
+  size: number
+}
+
+export type LayerFile = {
+  path: string
+  kind: FileKind
+  size: number
+}
+
+export type ImageLayerDiffs = {
+  layers: { changes: LayerChange[] }[]
+  note?: string | null
+}
+
+/** Max bytes fetched and rendered for an image layer file preview. */
+export const PREVIEW_MAX_BYTES = 256 * 1024
+
+export type LayerFilePreview = {
+  path: string
+  kind: "text" | "binary"
+  size: number
+  text: string | null
+  truncated: boolean
+}
+
 export type PruneResult = {
   deleted: number
   space_reclaimed: number

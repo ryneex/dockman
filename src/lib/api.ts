@@ -1,24 +1,28 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 
-import type {
-  ContainerRow,
-  ContainerStats,
-  DiskUsage,
-  EngineEvent,
-  EngineInfo,
-  FsEntry,
-  FsFile,
-  HostTerminal,
-  ImageRow,
-  ImageSearchRow,
-  LogChunk,
-  NetworkRow,
-  PruneResult,
-  StackDetail,
-  StackRow,
-  TermChunk,
-  VolumeRow,
+import {
+  PREVIEW_MAX_BYTES,
+  type ContainerRow,
+  type ContainerStats,
+  type DiskUsage,
+  type EngineEvent,
+  type EngineInfo,
+  type FsEntry,
+  type FsFile,
+  type HostTerminal,
+  type ImageHistoryRow,
+  type ImageLayerDiffs,
+  type ImageRow,
+  type LayerFilePreview,
+  type ImageSearchRow,
+  type LogChunk,
+  type NetworkRow,
+  type PruneResult,
+  type StackDetail,
+  type StackRow,
+  type TermChunk,
+  type VolumeRow,
 } from "@/lib/types"
 
 export const api = {
@@ -45,6 +49,14 @@ export const api = {
   containerLogsStop: (id: string) => invoke<void>("container_logs_stop", { id }),
   listImages: () => invoke<ImageRow[]>("list_images"),
   imageInspect: (id: string) => invoke<unknown>("image_inspect", { id }),
+  imageHistory: (id: string) => invoke<ImageHistoryRow[]>("image_history", { id }),
+  imageLayerDiffs: (id: string) => invoke<ImageLayerDiffs>("image_layer_diffs", { id }),
+  imageLayerFile: async (id: string, layerIndex: number, path: string) => {
+    const preview = await invoke<LayerFilePreview>("image_layer_file", { id, layerIndex, path })
+    const text = preview.text
+    if (typeof text !== "string" || text.length <= PREVIEW_MAX_BYTES) return preview
+    return { ...preview, text: text.slice(0, PREVIEW_MAX_BYTES), truncated: true }
+  },
   imageRemove: (id: string) => invoke<void>("image_remove", { id }),
   imagePull: (reference: string) => invoke<void>("image_pull", { reference }),
   imageSearch: (term: string) => invoke<ImageSearchRow[]>("image_search", { term }),

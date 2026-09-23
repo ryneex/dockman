@@ -2,7 +2,7 @@ import { useQueries, useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 
 import { api } from "@/lib/api"
-import type { ContainerStats } from "@/lib/types"
+import { PREVIEW_MAX_BYTES, type ContainerStats, type LayerFilePreview } from "@/lib/types"
 
 const interval = 3000
 
@@ -81,6 +81,55 @@ export function useImageInspect(id: string | null, enabled = true) {
     queryFn: () => api.imageInspect(id!),
     enabled: Boolean(id) && enabled,
     staleTime: 5 * 60 * 1000,
+  })
+}
+
+export function useImageHistory(id: string | null) {
+  return useQuery({
+    queryKey: ["image-history", id],
+    queryFn: () => api.imageHistory(id!),
+    enabled: Boolean(id),
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+export function useImageLayerDiffs(id: string | null) {
+  return useQuery({
+    queryKey: ["image-layer-diffs", id],
+    queryFn: () => api.imageLayerDiffs(id!),
+    enabled: Boolean(id),
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  })
+}
+
+export function capLayerFilePreview(preview: LayerFilePreview): LayerFilePreview {
+  const text = preview.text
+  if (typeof text !== "string" || text.length <= PREVIEW_MAX_BYTES) return preview
+  return {
+    ...preview,
+    text: text.slice(0, PREVIEW_MAX_BYTES),
+    truncated: true,
+  }
+}
+
+export function useImageLayerFile(
+  id: string | null,
+  layerIndex: number | null,
+  path: string | null,
+  epoch = 0,
+) {
+  return useQuery({
+    queryKey: ["image-layer-file", id, layerIndex, path, epoch],
+    queryFn: async ({ signal }) => {
+      const preview = capLayerFilePreview(await api.imageLayerFile(id!, layerIndex!, path!))
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError")
+      return preview
+    },
+    enabled: Boolean(id) && layerIndex != null && Boolean(path),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
   })
 }
 

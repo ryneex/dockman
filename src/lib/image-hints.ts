@@ -107,6 +107,19 @@ export function envFromInspect(inspect: unknown) {
     })
 }
 
+export function workingDirFromInspect(inspect: unknown) {
+  const config = configOf(inspect)
+  if (!config) return "/"
+  const raw = config.WorkingDir ?? config.working_dir
+  if (typeof raw !== "string") return "/"
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed === ".") return "/"
+  const withoutDot = trimmed.replace(/^\.\//, "")
+  const absolute = withoutDot.startsWith("/") ? withoutDot : `/${withoutDot}`
+  const collapsed = absolute.replace(/\/+/g, "/")
+  return collapsed === "/" ? "/" : collapsed.replace(/\/+$/, "")
+}
+
 export function splitImageRef(ref: string) {
   const trimmed = ref.trim()
   if (!trimmed) return { repo: "", tag: "" }

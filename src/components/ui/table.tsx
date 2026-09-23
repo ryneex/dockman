@@ -38,13 +38,24 @@ export function THead({ columns }: { columns: ReactNode[] }) {
   )
 }
 
-export function TRow({ children, active }: { children: ReactNode; active?: boolean }) {
+export function TRow({
+  children,
+  active,
+  onClick,
+}: {
+  children: ReactNode
+  active?: boolean
+  onClick?: () => void
+}) {
   return (
     <tr
+      aria-selected={active || undefined}
       className={cn(
         "group border-border/70 hover:bg-hover/70 h-10 border-b transition-colors",
         active && "bg-accent/10",
+        onClick && "cursor-pointer",
       )}
+      onClick={onClick}
     >
       {children}
     </tr>

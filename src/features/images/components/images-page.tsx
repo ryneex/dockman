@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Download, Eraser, FileDown, Play, RefreshCw, ScanSearch, Tag, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { CopyId, RowActions, RowName, UsedBy, usageNames } from "@/components/common"
@@ -33,6 +34,7 @@ export function ImagesPage() {
   const query = useImages()
   const { query: filter } = useFilter()
   const client = useQueryClient()
+  const navigate = useNavigate()
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [pullOpen, setPullOpen] = useState(false)
   const [loadOpen, setLoadOpen] = useState(false)
@@ -62,7 +64,10 @@ export function ImagesPage() {
 
   const inspect = useImageInspect(inspectId)
 
-  const { index, setIndex } = useTableNav(rows, (row) => setInspectId(row.id))
+  const { index, setIndex } = useTableNav(
+    rows,
+    (row) => void navigate(`/images/${encodeURIComponent(row.id)}`),
+  )
   const selected = inspectId ? rows.find((row) => row.id === inspectId) : undefined
 
   const remove = useMutation({
@@ -153,10 +158,8 @@ export function ImagesPage() {
               <span className="inline-flex min-w-0 items-center gap-2">
                 <RowName
                   className="min-w-0"
-                  onClick={() => {
-                    setIndex(rowIndex)
-                    setInspectId(row.id)
-                  }}
+                  to={`/images/${encodeURIComponent(row.id)}`}
+                  onClick={() => setIndex(rowIndex)}
                 >
                   {row.tags.join(", ") || "<none>"}
                 </RowName>

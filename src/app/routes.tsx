@@ -10,7 +10,7 @@ import {
   ContainersPage,
 } from "@/features/containers"
 import { DashboardPage } from "@/features/dashboard"
-import { ImagesPage } from "@/features/images"
+import { ImagePage, ImagesPage } from "@/features/images"
 import { NetworksPage } from "@/features/networks"
 import { SettingsPage } from "@/features/settings"
 import { StackPage, StacksPage } from "@/features/stacks"
@@ -31,6 +31,7 @@ export function AppRoutes() {
         <Route path="inspect" element={<ContainerInspectTab />} />
       </Route>
       <Route path="/images" element={<ImagesPage />} />
+      <Route path="/images/:id" element={<ImagePage />} />
       <Route path="/volumes" element={<VolumesPage />} />
       <Route path="/networks" element={<NetworksPage />} />
       <Route path="/stacks" element={<StacksPage />} />
