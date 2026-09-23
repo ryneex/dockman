@@ -58,8 +58,9 @@ sudo pacman -Rns dockman
 - Running containers show live CPU, memory, and network I/O on the list and the detail header
 - Container overview: health, exit code, start/finish times, env, ports (open published TCP), mounts, networks with IPs; in-app terminal can restart
 - Run options: command (from image CMD), mounts, network, restart policy, ports (TCP/UDP), env; Advanced: entrypoint, user, working dir, memory
-- Images: pull, run as a container, inspect (summary + JSON), tag, save/load from a path, remove, dangling marker
-- Compose: in-app compose library (visual subset + YAML), start/stop with `docker compose -p <project>`
+- Images: pull, run as a container, inspect drawer (summary + JSON), tag, save/load from a path, remove, dangling marker
+- Image layer viewer at `/images/:id`: Dockerfile-ordered stages, current filesystem tree, file preview (256 KiB cap)
+- Compose: in-app compose library (`compose.yml` is the source of truth; visual subset + YAML), start/stop projects with `docker compose -p`
 - Volumes and networks: create, inspect, remove; connect or disconnect a container on a network
 - Prune unused containers, images, volumes, and networks; bulk delete from lists
 - Usage hints for images, volumes, and networks; click through to the container
@@ -69,4 +70,4 @@ sudo pacman -Rns dockman
 
 ## Out of scope
 
-Compose build/profiles/includes, image build, image layer history, Kubernetes, Swarm, plugins, secrets, registry auth/push, resource charts.
+Compose build/profiles/includes, image build, Kubernetes, Swarm, plugins, secrets, registry auth/push, resource charts.
