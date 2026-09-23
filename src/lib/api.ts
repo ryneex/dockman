@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 
 import type {
   ContainerRow,
+  ContainerStats,
+  DiskUsage,
+  EngineEvent,
   EngineInfo,
   FsEntry,
   FsFile,
@@ -12,6 +15,8 @@ import type {
   LogChunk,
   NetworkRow,
   PruneResult,
+  StackDetail,
+  StackRow,
   TermChunk,
   VolumeRow,
 } from "@/lib/types"
@@ -53,6 +58,10 @@ export const api = {
     mounts: string[]
     network?: string
     restart?: string
+    user?: string
+    workingDir?: string
+    /** Memory limit as bytes ("536870912") or a Docker size ("512m", "1g"). Omit or empty for unlimited. */
+    memory?: string
     start: boolean
   }) =>
     invoke<string>("container_create", {
@@ -65,11 +74,24 @@ export const api = {
       mounts: input.mounts,
       network: input.network || null,
       restart: input.restart || null,
+      user: input.user || null,
+      workingDir: input.workingDir || null,
+      memory: input.memory || null,
       start: input.start,
     }),
+  containerStats: (id: string) => invoke<ContainerStats>("container_stats", { id }),
   containersPrune: () => invoke<PruneResult>("containers_prune"),
   imagesPrune: () => invoke<PruneResult>("images_prune"),
   volumesPrune: () => invoke<PruneResult>("volumes_prune"),
+  networksPrune: () => invoke<PruneResult>("networks_prune"),
+  systemDf: () => invoke<DiskUsage>("system_df"),
+  engineEvents: (since?: number | null) =>
+    invoke<EngineEvent[]>("engine_events", { since: since ?? null }),
+  imageTag: (idOrName: string, repo: string, tag?: string) =>
+    invoke<void>("image_tag", { idOrName, repo, tag: tag || null }),
+  imageSave: (idOrName: string, destPath: string) =>
+    invoke<void>("image_save", { idOrName, destPath }),
+  imageLoad: (srcPath: string) => invoke<void>("image_load", { srcPath }),
   volumeCreate: (name: string, driver?: string) =>
     invoke<string>("volume_create", { name, driver }),
   networkCreate: (name: string, driver?: string) =>
@@ -85,6 +107,21 @@ export const api = {
   listNetworks: () => invoke<NetworkRow[]>("list_networks"),
   networkInspect: (id: string) => invoke<unknown>("network_inspect", { id }),
   networkRemove: (id: string) => invoke<void>("network_remove", { id }),
+  networkConnect: (network: string, container: string) =>
+    invoke<void>("network_connect", { network, container }),
+  networkDisconnect: (network: string, container: string) =>
+    invoke<void>("network_disconnect", { network, container }),
+  composeAvailable: () => invoke<boolean>("compose_available"),
+  stackList: () => invoke<StackRow[]>("stack_list"),
+  stackCreate: (name: string, yaml?: string) =>
+    invoke<string>("stack_create", { name, yaml: yaml || null }),
+  stackRead: (id: string) => invoke<StackDetail>("stack_read", { id }),
+  stackWrite: (id: string, name: string, yaml: string) =>
+    invoke<void>("stack_write", { id, name, yaml }),
+  stackDelete: (id: string) => invoke<void>("stack_delete", { id }),
+  stackUp: (id: string, project: string) => invoke<void>("stack_up", { id, project }),
+  stackDown: (id: string, project: string, volumes = false) =>
+    invoke<void>("stack_down", { id, project, volumes }),
 }
 
 export function listenImagePull(
@@ -111,6 +148,22 @@ export function listenContainerTerm(
   return Promise.all([
     listen<TermChunk>("container-term", (event) => onChunk(event.payload)),
     listen<string>("container-term-end", (event) => onEnd?.(event.payload)),
+  ]).then((fns) => {
+    cleanups.push(...fns)
+    return () => {
+      for (const fn of cleanups) fn()
+    }
+  })
+}
+
+export function listenStackCompose(
+  onChunk: (chunk: LogChunk) => void,
+  onEnd?: (id: string) => void,
+): Promise<UnlistenFn> {
+  const cleanups: UnlistenFn[] = []
+  return Promise.all([
+    listen<LogChunk>("stack-compose", (event) => onChunk(event.payload)),
+    listen<string>("stack-compose-end", (event) => onEnd?.(event.payload)),
   ]).then((fns) => {
     cleanups.push(...fns)
     return () => {

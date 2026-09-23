@@ -1,4 +1,4 @@
-import { Copy } from "lucide-react"
+import { Clock, Copy } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
@@ -8,15 +8,23 @@ import { SearchField } from "@/components/ui/search-field"
 import { Tooltip } from "@/components/ui/tooltip"
 import { api, listenContainerLogs } from "@/lib/api"
 
+const timestampPrefix = /^(\d{4}-\d{2}-\d{2}T[^\s]+)\s/
+
+function stripLogTimestamp(line: string) {
+  return line.replace(timestampPrefix, "")
+}
+
 export function LogsPanel({ containerId }: { containerId: string }) {
   const [lines, setLines] = useState<string[]>([])
   const [filter, setFilter] = useState("")
+  const [showTimestamps, setShowTimestamps] = useState(true)
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
   useEffect(() => {
     setLines([])
     setFilter("")
+    setShowTimestamps(true)
     pinned.current = true
     let disposed = false
     const start = async () => {
@@ -49,9 +57,9 @@ export function LogsPanel({ containerId }: { containerId: string }) {
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase()
-    if (!needle) return lines
-    return lines.filter((line) => line.toLowerCase().includes(needle))
-  }, [filter, lines])
+    const matched = needle ? lines.filter((line) => line.toLowerCase().includes(needle)) : lines
+    return showTimestamps ? matched : matched.map(stripLogTimestamp)
+  }, [filter, lines, showTimestamps])
 
   useEffect(() => {
     if (!pinned.current || !scroller.current) return
@@ -59,7 +67,7 @@ export function LogsPanel({ containerId }: { containerId: string }) {
   }, [visible])
 
   async function copyAll() {
-    const text = lines.join("\n")
+    const text = visible.join("\n")
     if (!text) {
       toast.error("No logs to copy")
       return
@@ -77,6 +85,15 @@ export function LogsPanel({ containerId }: { containerId: string }) {
           placeholder="Filter logs"
           shortcut={false}
         />
+        <Tooltip label={showTimestamps ? "Hide timestamps" : "Show timestamps"}>
+          <IconButton
+            aria-label={showTimestamps ? "Hide timestamps" : "Show timestamps"}
+            className={showTimestamps ? "text-ink" : undefined}
+            onClick={() => setShowTimestamps((current) => !current)}
+          >
+            <Clock size={16} />
+          </IconButton>
+        </Tooltip>
         <Tooltip label="Copy logs">
           <IconButton aria-label="Copy logs" onClick={() => void copyAll()}>
             <Copy size={16} />

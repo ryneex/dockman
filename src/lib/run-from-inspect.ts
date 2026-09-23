@@ -44,18 +44,31 @@ function portsFromBindings(raw: unknown) {
   if (!isRecord(raw)) return []
   const lines: string[] = []
   for (const [key, bindings] of Object.entries(raw)) {
-    const [container] = key.split("/")
-    const proto = key.split("/")[1] ?? "tcp"
-    if (proto.toLowerCase() !== "tcp" || !container || !/^\d{1,5}$/.test(container)) continue
+    const [container, rawProto] = key.split("/")
+    const proto = (rawProto ?? "tcp").toLowerCase()
+    if ((proto !== "tcp" && proto !== "udp") || !container || !/^\d{1,5}$/.test(container)) continue
     const rows = Array.isArray(bindings) ? bindings : []
     for (const row of rows) {
       if (!isRecord(row)) continue
       const host = asString(pick(row, "HostPort", "host_port")).trim()
       if (!host || !/^\d{1,5}$/.test(host)) continue
-      lines.push(host === container ? host : `${host}:${container}`)
+      const mapping = host === container ? host : `${host}:${container}`
+      lines.push(proto === "tcp" ? mapping : `${mapping}/${proto}`)
     }
   }
   return [...new Set(lines)]
+}
+
+function memoryFromHost(raw: unknown) {
+  const bytes = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : 0
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return ""
+  const gib = 1024 * 1024 * 1024
+  const mib = 1024 * 1024
+  const kib = 1024
+  if (bytes % gib === 0) return `${bytes / gib}g`
+  if (bytes % mib === 0) return `${bytes / mib}m`
+  if (bytes % kib === 0) return `${bytes / kib}k`
+  return String(bytes)
 }
 
 function mountsFromBinds(raw: unknown) {
@@ -113,6 +126,10 @@ export function runValuesFromInspect(inspect: unknown): RunContainerValues | nul
     image,
     name: asString(pick(inspect, "Name", "name")).replace(/^\//, ""),
     cmd: joinLines(asStringList(pick(config, "Cmd", "cmd"))),
+    entrypoint: joinLines(asStringList(pick(config, "Entrypoint", "entrypoint"))),
+    user: asString(pick(config, "User", "user")),
+    workdir: asString(pick(config, "WorkingDir", "working_dir")),
+    memory: memoryFromHost(pick(host, "Memory", "memory")),
     ports: joinLines(portsFromBindings(pick(host, "PortBindings", "port_bindings"))),
     mounts: joinLines(binds.length ? binds : mountsFromMounts(pick(inspect, "Mounts", "mounts"))),
     env: joinLines(asStringList(pick(config, "Env", "env"))),

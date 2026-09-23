@@ -17,6 +17,7 @@ export function FormDialog({
   pending,
   error,
   wide,
+  compact,
   trigger,
   aside,
   onSubmit,
@@ -32,6 +33,7 @@ export function FormDialog({
   pending?: boolean
   error?: string | null
   wide?: boolean
+  compact?: boolean
   trigger?: ReactElement
   aside?: ReactNode
   onSubmit: (event: ChangeEvent) => void
@@ -65,7 +67,8 @@ export function FormDialog({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={motionOrInstant(panel)}
                 className={cn(
-                  "border-border bg-elevated flex max-h-[calc(100dvh-3rem)] min-h-80 flex-col overflow-y-auto rounded-[12px] border px-8 py-7 shadow-2xl shadow-black/50 outline-none",
+                  "border-border bg-elevated flex max-h-[calc(100dvh-3rem)] flex-col overflow-y-auto rounded-[12px] border px-8 py-7 shadow-2xl shadow-black/50 outline-none",
+                  compact ? null : "min-h-80",
                   wide
                     ? "w-[min(var(--container-dialog-wide),calc(100vw-3rem))]"
                     : "w-[min(var(--container-dialog),calc(100vw-3rem))]",

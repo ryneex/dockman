@@ -1,11 +1,17 @@
 import { useQuery } from "@tanstack/react-query"
-import { CopyPlus, Eye, EyeOff } from "lucide-react"
+import { Copy, CopyPlus, Eye, EyeOff } from "lucide-react"
 import { useState, type ReactNode } from "react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { IconButton } from "@/components/ui/icon-button"
 import { TableSkeleton } from "@/components/ui/skeleton"
+import { StatusChip } from "@/components/ui/status-dot"
+import { Tooltip } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
+import { formatDotenv } from "@/lib/dotenv"
+import { hostTcpPort, openPublishedPort } from "@/lib/open-port"
+import { healthTone, overviewStateFromInspect } from "@/lib/overview-state"
 import { overviewFromInspect } from "@/lib/run-from-inspect"
 import type { ContainerRow } from "@/lib/types"
 
@@ -37,8 +43,12 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
     queryFn: () => api.containerInspect(row.id),
   })
   const overview = overviewFromInspect(inspect.data)
+  const state = overviewStateFromInspect(inspect.data)
   const [showEnv, setShowEnv] = useState(false)
   const [openEnv, setOpenEnv] = useState<Set<string>>(() => new Set())
+  const networks = state?.networks.length
+    ? state.networks
+    : (overview?.networks ?? []).map((name) => ({ name, ip: "" }))
 
   if (inspect.isLoading) {
     return (
@@ -54,6 +64,17 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
     )
   }
 
+  const env = overview.env
+
+  async function copyEnv() {
+    try {
+      await navigator.clipboard.writeText(formatDotenv(env))
+      toast.success("Copied .env")
+    } catch (error) {
+      toast.error(String(error))
+    }
+  }
+
   return (
     <div className="h-full min-h-0 overflow-auto p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -66,6 +87,36 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
         </Button>
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
+        <div className="lg:col-span-2">
+          <Section title="State">
+            <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <dt className="text-faint text-sm">Health</dt>
+                <dd className="mt-1 text-sm">
+                  {state?.health ? (
+                    <StatusChip state={healthTone(state.health)} label={state.health} />
+                  ) : (
+                    <span className="text-muted">—</span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-faint text-sm">Exit code</dt>
+                <dd className="mt-1 font-mono text-sm">
+                  {state?.exitCode == null ? "—" : state.exitCode}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-faint text-sm">Started</dt>
+                <dd className="mt-1 text-sm">{state?.startedAt || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-faint text-sm">Finished</dt>
+                <dd className="mt-1 text-sm">{state?.finishedAt || "—"}</dd>
+              </div>
+            </dl>
+          </Section>
+        </div>
         <Section title="Command" empty={!overview.cmd}>
           <pre className="font-mono text-sm whitespace-pre-wrap">{overview.cmd}</pre>
         </Section>
@@ -74,9 +125,24 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
         </Section>
         <Section title="Ports" empty={!overview.ports.length}>
           <ul className="font-mono text-sm">
-            {overview.ports.map((port) => (
-              <li key={port}>{port}</li>
-            ))}
+            {overview.ports.map((port) => {
+              const host = hostTcpPort(port, true)
+              return (
+                <li key={port} className="flex items-center gap-2">
+                  <span className="min-w-0 break-all">{port}</span>
+                  {host ? (
+                    <button
+                      type="button"
+                      className="text-muted hover:text-ink shrink-0 text-sm"
+                      aria-label={`Open http://127.0.0.1:${host}`}
+                      onClick={() => void openPublishedPort(host)}
+                    >
+                      Open
+                    </button>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         </Section>
         <Section title="Restart" empty={!overview.restart}>
@@ -91,10 +157,13 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
             ))}
           </ul>
         </Section>
-        <Section title="Networks" empty={!overview.networks.length}>
+        <Section title="Networks" empty={!networks.length}>
           <ul className="text-sm">
-            {overview.networks.map((name) => (
-              <li key={name}>{name}</li>
+            {networks.map((network) => (
+              <li key={network.name} className="flex min-w-0 items-baseline gap-2">
+                <span className="min-w-0 truncate">{network.name}</span>
+                {network.ip ? <span className="text-muted font-mono">{network.ip}</span> : null}
+              </li>
             ))}
           </ul>
         </Section>
@@ -104,17 +173,24 @@ export function OverviewPanel({ row, onRecreate }: { row: ContainerRow; onRecrea
             empty={!overview.env.length}
             action={
               overview.env.length ? (
-                <Button
-                  variant="quiet"
-                  className="min-w-36"
-                  icon={showEnv ? <EyeOff /> : <Eye />}
-                  onClick={() => {
-                    setShowEnv((current) => !current)
-                    setOpenEnv(new Set())
-                  }}
-                >
-                  {showEnv ? "Hide values" : "Show values"}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Tooltip label="Copy as .env">
+                    <IconButton aria-label="Copy as .env" onClick={() => void copyEnv()}>
+                      <Copy size={16} />
+                    </IconButton>
+                  </Tooltip>
+                  <Button
+                    variant="quiet"
+                    className="min-w-36"
+                    icon={showEnv ? <EyeOff /> : <Eye />}
+                    onClick={() => {
+                      setShowEnv((current) => !current)
+                      setOpenEnv(new Set())
+                    }}
+                  >
+                    {showEnv ? "Hide values" : "Show values"}
+                  </Button>
+                </div>
               ) : null
             }
           >

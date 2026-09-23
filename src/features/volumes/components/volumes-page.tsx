@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Eraser, Plus, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
+import { Eraser, FolderOpen, Plus, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
+import { InspectDrawer, RowActions, RowName, UsedBy, usageNames } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
 import { matchesQuery } from "@/lib/format"
 import { isUnused, pruneMessage } from "@/lib/housekeeping"
+import { openHostPath } from "@/lib/open-path"
 import { useVolumes } from "@/lib/queries"
 import type { VolumeRow } from "@/lib/types"
 import { useSelection } from "@/lib/use-selection"
@@ -120,7 +121,7 @@ export function VolumesPage() {
       />
       <tbody>
         {rows.map((row, rowIndex) => (
-          <TRow key={row.name} active={rowIndex === index} onClick={() => setIndex(rowIndex)}>
+          <TRow key={row.name} active={rowIndex === index}>
             <TCell truncate={false}>
               <Checkbox
                 checked={selection.ids.has(row.name)}
@@ -129,13 +130,33 @@ export function VolumesPage() {
                 aria-label={`Select ${row.name}`}
               />
             </TCell>
-            <TCell>{row.name}</TCell>
+            <TCell>
+              <RowName
+                onClick={() => {
+                  setIndex(rowIndex)
+                  setInspectName(row.name)
+                }}
+              >
+                {row.name}
+              </RowName>
+            </TCell>
             <TCell className="text-muted">{row.driver}</TCell>
             <TCell>
               <UsedBy items={row.used_by} />
             </TCell>
             <TCell mono>{row.mountpoint}</TCell>
             <RowActions>
+              <Tooltip label={row.mountpoint.trim() ? "Open folder" : "No mountpoint"}>
+                <IconButton
+                  disabled={!row.mountpoint.trim()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void openHostPath(row.mountpoint)
+                  }}
+                >
+                  <FolderOpen size={16} />
+                </IconButton>
+              </Tooltip>
               <Tooltip label="Inspect">
                 <IconButton
                   onClick={(event) => {

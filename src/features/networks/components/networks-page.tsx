@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
+import { Eraser, Link2, Plus, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { CopyId, InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
+import { CopyId, InspectDrawer, RowActions, RowName, UsedBy, usageNames } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
 import { Button } from "@/components/ui/button"
@@ -16,13 +16,14 @@ import { Table, TCell, THead, TRow } from "@/components/ui/table"
 import { Tooltip } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
 import { matchesQuery } from "@/lib/format"
-import { isUnused } from "@/lib/housekeeping"
+import { isUnused, pruneMessage } from "@/lib/housekeeping"
 import { useNetworks } from "@/lib/queries"
 import type { NetworkRow } from "@/lib/types"
 import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
 import { CreateNetworkDialog } from "./create-network-dialog"
+import { NetworkConnectDialog } from "./network-connect-dialog"
 
 function canRemove(row: NetworkRow) {
   return !row.builtin && isUnused(row)
@@ -35,6 +36,8 @@ export function NetworksPage() {
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<NetworkRow | null>(null)
+  const [connectTarget, setConnectTarget] = useState<NetworkRow | null>(null)
+  const [pruneOpen, setPruneOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
 
   const rows = useMemo(
@@ -44,7 +47,11 @@ export function NetworksPage() {
       ),
     [filter, query.data],
   )
+  const unused = useMemo(() => (query.data ?? []).filter(canRemove), [query.data])
   const selection = useSelection(rows, (row) => row.id, canRemove)
+  const connectNetwork = connectTarget
+    ? (query.data?.find((row) => row.id === connectTarget.id) ?? connectTarget)
+    : null
 
   const inspect = useQuery({
     queryKey: ["network-inspect", inspectId],
@@ -72,6 +79,16 @@ export function NetworksPage() {
       setBulkOpen(false)
       selection.clear()
       toast.success(ids.length > 1 ? `Removed ${ids.length} networks` : "Removed network")
+    },
+    onError: (error) => toast.error(String(error)),
+    onSettled: () => void client.invalidateQueries({ queryKey: ["networks"] }),
+  })
+
+  const prune = useMutation({
+    mutationFn: api.networksPrune,
+    onSuccess: (result) => {
+      setPruneOpen(false)
+      toast.success(pruneMessage("networks", result))
     },
     onError: (error) => toast.error(String(error)),
     onSettled: () => void client.invalidateQueries({ queryKey: ["networks"] }),
@@ -114,11 +131,7 @@ export function NetworksPage() {
       />
       <tbody>
         {rows.map((row, rowIndex) => (
-          <TRow
-            key={row.id || row.name}
-            active={rowIndex === index}
-            onClick={() => setIndex(rowIndex)}
-          >
+          <TRow key={row.id || row.name} active={rowIndex === index}>
             <TCell truncate={false}>
               <Checkbox
                 checked={selection.ids.has(row.id)}
@@ -127,7 +140,16 @@ export function NetworksPage() {
                 aria-label={`Select ${row.name}`}
               />
             </TCell>
-            <TCell>{row.name}</TCell>
+            <TCell>
+              <RowName
+                onClick={() => {
+                  setIndex(rowIndex)
+                  setInspectId(row.id)
+                }}
+              >
+                {row.name}
+              </RowName>
+            </TCell>
             <TCell className="text-muted">{row.driver}</TCell>
             <TCell className="text-muted">{row.scope}</TCell>
             <TCell>
@@ -137,6 +159,16 @@ export function NetworksPage() {
               <CopyId id={row.id} />
             </TCell>
             <RowActions>
+              <Tooltip label="Connect">
+                <IconButton
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setConnectTarget(row)
+                  }}
+                >
+                  <Link2 size={16} />
+                </IconButton>
+              </Tooltip>
               <Tooltip label="Inspect">
                 <IconButton
                   onClick={(event) => {
@@ -183,6 +215,9 @@ export function NetworksPage() {
               Remove {selection.selected.length}
             </Button>
           ) : null}
+          <Button icon={<Eraser />} disabled={!unused.length} onClick={() => setPruneOpen(true)}>
+            Prune unused
+          </Button>
           <CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />
         </>
       }
@@ -205,6 +240,13 @@ export function NetworksPage() {
         onConfirm={() => removeTarget && remove.mutate([removeTarget.id])}
         onClose={() => setRemoveTarget(null)}
       />
+      <NetworkConnectDialog
+        open={Boolean(connectTarget)}
+        network={connectNetwork}
+        onOpenChange={(next) => {
+          if (!next) setConnectTarget(null)
+        }}
+      />
       <ConfirmDialog
         open={bulkOpen}
         title="Remove networks"
@@ -214,6 +256,16 @@ export function NetworksPage() {
         pending={remove.isPending}
         onConfirm={() => remove.mutate(selection.selected.map((row) => row.id))}
         onClose={() => setBulkOpen(false)}
+      />
+      <ConfirmDialog
+        open={pruneOpen}
+        title="Prune unused networks"
+        description={`This will remove ${unused.length} unused networks.`}
+        confirmLabel="Prune"
+        danger
+        pending={prune.isPending}
+        onConfirm={() => prune.mutate()}
+        onClose={() => setPruneOpen(false)}
       />
     </ListPage>
   )

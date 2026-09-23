@@ -8,6 +8,7 @@ A Linux desktop app for controlling a local Docker Engine. It talks to `/var/run
 - pnpm 11.15.0
 - Rust (stable)
 - Docker Engine, with your user in the `docker` group
+- `docker compose` (or `docker-compose`) to start and stop compose files
 - Tauri Linux deps, including `webkit2gtk-4.1`
 
 On Arch, install (or later remove) the Tauri/build deps as one metapackage:
@@ -52,18 +53,20 @@ sudo pacman -Rns dockman
 
 ## Features (v1)
 
-- Dashboard with engine status and resource counts
+- Dashboard with engine status, resource counts, disk usage (size + reclaimable), and a recent events strip
 - Containers: run, start, stop, pause, restart, rename, recreate, remove, logs, inspect, browse files, open a terminal (host app or in Dockman)
-- Container overview: env, ports, mounts, networks; in-app terminal can restart
-- Run options: command (from image CMD), mounts, network, restart policy, ports, env
-- Images: pull, run as a container, inspect, remove, dangling marker
-- Volumes and networks: create, inspect, remove
-- Prune unused containers, images, and volumes; bulk delete from lists
-- Usage hints for images, volumes, and networks
+- Running containers show live CPU, memory, and network I/O on the list and the detail header
+- Container overview: health, exit code, start/finish times, env, ports (open published TCP), mounts, networks with IPs; in-app terminal can restart
+- Run options: command (from image CMD), mounts, network, restart policy, ports (TCP/UDP), env; Advanced: entrypoint, user, working dir, memory
+- Images: pull, run as a container, inspect (summary + JSON), tag, save/load from a path, remove, dangling marker
+- Compose: in-app compose library (visual subset + YAML), start/stop with `docker compose -p <project>`
+- Volumes and networks: create, inspect, remove; connect or disconnect a container on a network
+- Prune unused containers, images, volumes, and networks; bulk delete from lists
+- Usage hints for images, volumes, and networks; click through to the container
 - Live search (`/`), `j`/`k` row movement, `Enter` to inspect
-- Logs: timestamps, filter, copy
+- Inspect JSON copy; logs: timestamp toggle, filter, copy
 - Settings: text size, preferred terminal app, open in host app or Dockman
 
 ## Out of scope
 
-Compose, image build, image layer history, resource charts, Kubernetes.
+Compose build/profiles/includes, image build, image layer history, Kubernetes, Swarm, plugins, secrets, registry auth/push, resource charts.

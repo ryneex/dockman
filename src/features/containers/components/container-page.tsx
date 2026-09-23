@@ -1,7 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, CopyPlus } from "lucide-react"
 import { useMemo, useState } from "react"
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom"
+import {
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useOutletContext,
+  useParams,
+} from "react-router-dom"
 import { toast } from "sonner"
 
 import { CopyId, JsonView, LogsPanel } from "@/components/common"
@@ -13,18 +20,20 @@ import { TableSkeleton } from "@/components/ui/skeleton"
 import { StatusChip } from "@/components/ui/status-dot"
 import { api } from "@/lib/api"
 import { findContainer } from "@/lib/container-ref"
-import { useContainers } from "@/lib/queries"
+import { useContainerStats, useContainers } from "@/lib/queries"
 import { runValuesFromInspect } from "@/lib/run-from-inspect"
 import type { ContainerRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { useContainerAct } from "../lib/use-container-act"
+import { ComposeChip } from "./compose-chip"
 import { ContainerActions } from "./container-actions"
 import { FilesPanel } from "./files-drawer"
 import { OverviewPanel } from "./overview-panel"
 import { PortList } from "./port-list"
 import { RenameContainerDialog } from "./rename-container-dialog"
 import { RunContainerDialog } from "./run-container-dialog"
+import { StatsBlock } from "./stats-block"
 import { TerminalPanel } from "./terminal-panel"
 
 const tabs = [
@@ -35,9 +44,24 @@ const tabs = [
   { to: "inspect", label: "Inspect" },
 ]
 
+function backFromState(state: unknown): { to: string; label: string } {
+  if (!state || typeof state !== "object" || !("from" in state)) {
+    return { to: "/containers", label: "containers" }
+  }
+  const from = (state as { from: unknown }).from
+  if (typeof from !== "string" || !from.startsWith("/") || from.startsWith("//")) {
+    return { to: "/containers", label: "containers" }
+  }
+  const raw = "fromLabel" in state ? (state as { fromLabel: unknown }).fromLabel : undefined
+  const label = typeof raw === "string" && raw.trim() ? raw.trim() : "Compose"
+  return { to: from, label }
+}
+
 export function ContainerPage() {
   const { id = "" } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const back = backFromState(location.state)
   const query = useContainers()
   const client = useQueryClient()
   const row = findContainer(query.data, id)
@@ -50,6 +74,7 @@ export function ContainerPage() {
     queryFn: () => api.containerInspect(row!.id),
     enabled: Boolean(row),
   })
+  const stats = useContainerStats(row?.id ?? null, row?.state === "running")
   const recreateValues = useMemo(() => runValuesFromInspect(inspect.data), [inspect.data])
 
   const remove = useMutation({
@@ -73,7 +98,7 @@ export function ContainerPage() {
       <EmptyState
         title="Could not load container"
         body={String(query.error)}
-        action={{ label: "Back to containers", onClick: () => void navigate("/containers") }}
+        action={{ label: `Back to ${back.label}`, onClick: () => void navigate(back.to) }}
       />
     )
   }
@@ -91,7 +116,7 @@ export function ContainerPage() {
       <EmptyState
         title="Container not found"
         body="It may have been removed, or this ID does not match a local container."
-        action={{ label: "Back to containers", onClick: () => void navigate("/containers") }}
+        action={{ label: `Back to ${back.label}`, onClick: () => void navigate(back.to) }}
       />
     )
   }
@@ -100,19 +125,21 @@ export function ContainerPage() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-border shrink-0 border-b">
         <div className="flex items-center gap-3 px-4 py-3">
-          <IconButton aria-label="Back to containers" onClick={() => void navigate("/containers")}>
+          <IconButton aria-label={`Back to ${back.label}`} onClick={() => void navigate(back.to)}>
             <ArrowLeft size={16} />
           </IconButton>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="truncate tracking-[-0.03em]">{row.name || "—"}</h1>
               <StatusChip state={row.state} label={row.status} />
+              <ComposeChip project={row.compose_project} service={row.compose_service} />
             </div>
             <div className="text-muted mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
               <span className="truncate">{row.image}</span>
               <PortList ports={row.ports} />
               <CopyId id={row.id} />
             </div>
+            {row.state === "running" ? <StatsBlock stats={stats.data} className="mt-1" /> : null}
           </div>
           <Button
             icon={<CopyPlus />}
@@ -134,6 +161,7 @@ export function ContainerPage() {
               key={tab.label}
               to={tab.to}
               end={tab.end}
+              state={location.state}
               className={({ isActive }) =>
                 cn(
                   "-mb-px border-b-2 px-3 py-2 text-sm transition-colors",
@@ -160,7 +188,7 @@ export function ContainerPage() {
         onOpenChange={setRecreateOpen}
         onCreated={(id) => {
           toast.success("Recreated container")
-          void navigate(`/containers/${id}`)
+          void navigate(`/containers/${id}`, { state: location.state })
         }}
       />
       <RenameContainerDialog

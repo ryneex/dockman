@@ -1,4 +1,5 @@
 mod docker;
+mod stacks;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,15 +37,32 @@ pub fn run() {
             docker::network_remove,
             docker::image_pull,
             docker::image_search,
+            docker::image_tag,
+            docker::image_save,
+            docker::image_load,
             docker::container_create,
+            docker::container_stats,
             docker::containers_prune,
             docker::images_prune,
             docker::volumes_prune,
+            docker::networks_prune,
+            docker::system_df,
+            docker::engine_events,
             docker::volume_create,
             docker::network_create,
+            docker::network_connect,
+            docker::network_disconnect,
             docker::container_fs_list,
             docker::container_fs_read,
             docker::container_fs_write,
+            stacks::compose_available,
+            stacks::stack_list,
+            stacks::stack_create,
+            stacks::stack_read,
+            stacks::stack_write,
+            stacks::stack_delete,
+            stacks::stack_up,
+            stacks::stack_down,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

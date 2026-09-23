@@ -73,3 +73,46 @@ export function exposedPortsFromInspect(inspect: unknown) {
   }
   return [...ports].sort((a, b) => Number(a) - Number(b))
 }
+
+export function exposedPortSpecsFromInspect(inspect: unknown) {
+  const specs = new Set<string>()
+  for (const key of configPorts(inspect)) {
+    const [port, rawProto = "tcp"] = key.split("/")
+    if (!port || !/^\d{1,5}$/.test(port)) continue
+    const value = Number(port)
+    if (value < 1 || value > 65535) continue
+    const proto = rawProto.toLowerCase() || "tcp"
+    if (proto !== "tcp" && proto !== "udp") continue
+    specs.add(`${port}/${proto}`)
+  }
+  return [...specs].sort((a, b) => {
+    const [aPort = "0", aProto = "tcp"] = a.split("/")
+    const [bPort = "0", bProto = "tcp"] = b.split("/")
+    return Number(aPort) - Number(bPort) || aProto.localeCompare(bProto)
+  })
+}
+
+export function envFromInspect(inspect: unknown) {
+  const config = configOf(inspect)
+  if (!config) return []
+  const raw = config.Env ?? config.env
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .map((line) => {
+      const sep = line.indexOf("=")
+      return sep === -1
+        ? { key: line, value: "" }
+        : { key: line.slice(0, sep), value: line.slice(sep + 1) }
+    })
+}
+
+export function splitImageRef(ref: string) {
+  const trimmed = ref.trim()
+  if (!trimmed) return { repo: "", tag: "" }
+  const colon = trimmed.lastIndexOf(":")
+  if (colon > 0 && !trimmed.slice(colon + 1).includes("/")) {
+    return { repo: trimmed.slice(0, colon), tag: trimmed.slice(colon + 1) }
+  }
+  return { repo: trimmed, tag: "" }
+}

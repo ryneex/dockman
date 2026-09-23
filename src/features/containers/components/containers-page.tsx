@@ -4,7 +4,7 @@ import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
-import { CopyId, RowActions } from "@/components/common"
+import { CopyId, RowActions, RowName } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
 import { Button } from "@/components/ui/button"
@@ -15,18 +15,21 @@ import { TableSkeleton } from "@/components/ui/skeleton"
 import { StatusChip } from "@/components/ui/status-dot"
 import { Table, TCell, THead, TRow } from "@/components/ui/table"
 import { api } from "@/lib/api"
-import { formatAge, matchesQuery } from "@/lib/format"
+import { containerMatchesQuery } from "@/lib/compose-groups"
+import { formatAge } from "@/lib/format"
 import { isActiveContainer, pruneMessage } from "@/lib/housekeeping"
-import { useContainers } from "@/lib/queries"
+import { useContainerStatsMap, useContainers } from "@/lib/queries"
 import type { ContainerRow } from "@/lib/types"
 import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
 import { useContainerAct } from "../lib/use-container-act"
+import { ComposeChip } from "./compose-chip"
 import { ContainerActions } from "./container-actions"
 import { PortList } from "./port-list"
 import { RenameContainerDialog } from "./rename-container-dialog"
 import { RunContainerDialog } from "./run-container-dialog"
+import { formatCpuPercent, formatMemUsage, formatNetIo } from "./stats-block"
 
 export function ContainersPage() {
   const query = useContainers()
@@ -40,24 +43,18 @@ export function ContainersPage() {
   const [bulkOpen, setBulkOpen] = useState(false)
 
   const rows = useMemo(
-    () =>
-      (query.data ?? []).filter((row) =>
-        matchesQuery(
-          filter,
-          row.name,
-          row.image,
-          row.id,
-          row.state,
-          row.status,
-          row.ports.join(" "),
-        ),
-      ),
+    () => (query.data ?? []).filter((row) => containerMatchesQuery(filter, row)),
     [filter, query.data],
   )
   const stopped = useMemo(
     () => (query.data ?? []).filter((row) => !isActiveContainer(row.state)),
     [query.data],
   )
+  const runningIds = useMemo(
+    () => (query.data ?? []).filter((row) => row.state === "running").map((row) => row.id),
+    [query.data],
+  )
+  const statsMap = useContainerStatsMap(runningIds)
   const selection = useSelection(rows, (row) => row.id)
   const { index, setIndex } = useTableNav(rows, (row) => void navigate(`/containers/${row.id}`))
   const act = useContainerAct()
@@ -117,7 +114,21 @@ export function ContainersPage() {
   ) : !rows.length ? (
     <EmptyState title="No matches" body="Nothing in this view matches the current filter." />
   ) : (
-    <Table cols={["w-12", "w-[16%]", "w-[20%]", "w-[18%]", "w-[20%]", "w-[8%]", "w-[10%]", "w-0"]}>
+    <Table
+      cols={[
+        "w-12",
+        "w-[13%]",
+        "w-[14%]",
+        "w-[13%]",
+        "w-[7%]",
+        "w-[12%]",
+        "w-[12%]",
+        "w-[13%]",
+        "w-[6%]",
+        "w-[8%]",
+        "w-0",
+      ]}
+    >
       <THead
         columns={[
           <Checkbox
@@ -130,6 +141,9 @@ export function ContainersPage() {
           "Name",
           "Image",
           "Status",
+          "CPU",
+          "Memory",
+          "Net I/O",
           "Ports",
           "Age",
           "ID",
@@ -137,44 +151,60 @@ export function ContainersPage() {
         ]}
       />
       <tbody>
-        {rows.map((row, rowIndex) => (
-          <TRow
-            key={row.id}
-            active={rowIndex === index}
-            onClick={() => {
-              setIndex(rowIndex)
-              void navigate(`/containers/${row.id}`)
-            }}
-          >
-            <TCell truncate={false}>
-              <Checkbox
-                checked={selection.ids.has(row.id)}
-                onChange={() => selection.toggle(row.id)}
-                aria-label={`Select ${row.name || row.id}`}
-              />
-            </TCell>
-            <TCell>{row.name || "—"}</TCell>
-            <TCell className="text-muted">{row.image}</TCell>
-            <TCell>
-              <StatusChip state={row.state} label={row.status} />
-            </TCell>
-            <TCell>
-              <PortList ports={row.ports} />
-            </TCell>
-            <TCell className="text-muted">{formatAge(row.created)}</TCell>
-            <TCell>
-              <CopyId id={row.id} />
-            </TCell>
-            <RowActions>
-              <ContainerActions
-                row={row}
-                act={act}
-                onRename={() => setRenameTarget(row)}
-                onRemove={() => setRemoveTarget(row)}
-              />
-            </RowActions>
-          </TRow>
-        ))}
+        {rows.map((row, rowIndex) => {
+          const stats = row.state === "running" ? statsMap.get(row.id) : undefined
+          return (
+            <TRow key={row.id} active={rowIndex === index}>
+              <TCell truncate={false}>
+                <Checkbox
+                  checked={selection.ids.has(row.id)}
+                  onChange={() => selection.toggle(row.id)}
+                  aria-label={`Select ${row.name || row.id}`}
+                />
+              </TCell>
+              <TCell truncate={false}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <RowName
+                    className="min-w-0"
+                    to={`/containers/${row.id}`}
+                    onClick={() => setIndex(rowIndex)}
+                  >
+                    {row.name || "—"}
+                  </RowName>
+                  <ComposeChip project={row.compose_project} service={row.compose_service} />
+                </span>
+              </TCell>
+              <TCell className="text-muted">{row.image}</TCell>
+              <TCell>
+                <StatusChip state={row.state} label={row.status} />
+              </TCell>
+              <TCell className="text-muted tabular-nums">
+                {stats ? formatCpuPercent(stats.cpu_percent) : "—"}
+              </TCell>
+              <TCell className="text-muted tabular-nums">
+                {stats ? formatMemUsage(stats.memory_used, stats.memory_limit) : "—"}
+              </TCell>
+              <TCell className="text-muted tabular-nums">
+                {stats ? formatNetIo(stats.net_rx, stats.net_tx) : "—"}
+              </TCell>
+              <TCell>
+                <PortList ports={row.ports} />
+              </TCell>
+              <TCell className="text-muted">{formatAge(row.created)}</TCell>
+              <TCell>
+                <CopyId id={row.id} />
+              </TCell>
+              <RowActions>
+                <ContainerActions
+                  row={row}
+                  act={act}
+                  onRename={() => setRenameTarget(row)}
+                  onRemove={() => setRemoveTarget(row)}
+                />
+              </RowActions>
+            </TRow>
+          )
+        })}
       </tbody>
     </Table>
   )

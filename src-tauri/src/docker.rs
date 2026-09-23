@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -8,17 +8,19 @@ use std::sync::Mutex;
 use bollard::body_full;
 use bollard::exec::{ResizeExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::{
-    ContainerCreateBody, ContainerInspectResponse, ExecConfig, HostConfig, NetworkCreateRequest,
-    PortBinding, RestartPolicy, RestartPolicyNameEnum, VolumeCreateRequest,
+    ContainerCreateBody, ContainerInspectResponse, ExecConfig, HostConfig, NetworkConnectRequest,
+    NetworkCreateRequest, NetworkDisconnectRequest, PortBinding, RestartPolicy,
+    RestartPolicyNameEnum, VolumeCreateRequest,
 };
 use bollard::query_parameters::{
     ContainerArchiveInfoOptionsBuilder, CreateContainerOptionsBuilder, CreateImageOptionsBuilder,
-    DownloadFromContainerOptionsBuilder, InspectNetworkOptionsBuilder,
-    ListContainersOptionsBuilder, ListImagesOptionsBuilder, ListNetworksOptionsBuilder,
-    ListVolumesOptionsBuilder, LogsOptionsBuilder, PruneImagesOptionsBuilder,
-    RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder,
-    RenameContainerOptionsBuilder, RestartContainerOptionsBuilder, SearchImagesOptionsBuilder,
-    StartContainerOptions, StopContainerOptionsBuilder, UploadToContainerOptionsBuilder,
+    DownloadFromContainerOptionsBuilder, EventsOptionsBuilder, ImportImageOptionsBuilder,
+    InspectNetworkOptionsBuilder, ListContainersOptionsBuilder, ListImagesOptionsBuilder,
+    ListNetworksOptionsBuilder, ListVolumesOptionsBuilder, LogsOptionsBuilder,
+    PruneImagesOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
+    RemoveVolumeOptionsBuilder, RenameContainerOptionsBuilder, RestartContainerOptionsBuilder,
+    SearchImagesOptionsBuilder, StartContainerOptions, StatsOptionsBuilder,
+    StopContainerOptionsBuilder, TagImageOptionsBuilder, UploadToContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures_util::future::{AbortHandle, Abortable};
@@ -80,10 +82,16 @@ pub struct ContainerRow {
     pub state: String,
     pub ports: Vec<String>,
     pub created: i64,
+    pub compose_project: Option<String>,
+    pub compose_service: Option<String>,
+    pub compose_id: Option<String>,
+    pub compose_workdir: Option<String>,
+    pub compose_config_files: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
 pub struct UsageRef {
+    pub id: String,
     pub name: String,
     pub state: String,
 }
@@ -153,6 +161,15 @@ fn container_state(container: &bollard::models::ContainerSummary) -> String {
         .map(|state| state.to_string())
         .filter(|state| !state.is_empty())
         .unwrap_or_else(|| "unknown".into())
+}
+
+fn compose_label(labels: &Option<HashMap<String, String>>, key: &str) -> Option<String> {
+    labels
+        .as_ref()?
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn usage_rank(state: &str) -> u8 {
@@ -232,6 +249,7 @@ async fn resource_usage(docker: &Docker) -> Result<ResourceUsage, String> {
 
     for container in containers {
         let usage = UsageRef {
+            id: container.id.clone().unwrap_or_default(),
             name: container_name(&container),
             state: container_state(&container),
         };
@@ -312,14 +330,14 @@ pub async fn list_containers() -> Result<Vec<ContainerRow>, String> {
     let mut rows: Vec<ContainerRow> = containers
         .into_iter()
         .map(|c| {
-            let name = c
-                .names
-                .unwrap_or_default()
-                .into_iter()
-                .next()
-                .unwrap_or_default()
-                .trim_start_matches('/')
-                .to_string();
+            let name = container_name(&c);
+            let state = container_state(&c);
+            let compose_project = compose_label(&c.labels, "com.docker.compose.project");
+            let compose_service = compose_label(&c.labels, "com.docker.compose.service");
+            let compose_id = compose_label(&c.labels, "com.dockman.compose.id");
+            let compose_workdir = compose_label(&c.labels, "com.docker.compose.project.working_dir");
+            let compose_config_files =
+                compose_label(&c.labels, "com.docker.compose.project.config_files");
             let ports = c
                 .ports
                 .unwrap_or_default()
@@ -337,13 +355,14 @@ pub async fn list_containers() -> Result<Vec<ContainerRow>, String> {
                 name,
                 image: c.image.unwrap_or_default(),
                 status: c.status.unwrap_or_default(),
-                state: c
-                    .state
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "unknown".into()),
+                state,
                 ports,
                 created: c.created.unwrap_or(0),
+                compose_project,
+                compose_service,
+                compose_id,
+                compose_workdir,
+                compose_config_files,
             }
         })
         .collect();
@@ -451,7 +470,7 @@ fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn resolve_bin(name: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_bin(name: &str) -> Option<PathBuf> {
     if name.contains('/') {
         let path = PathBuf::from(name);
         return (path.is_file() && is_executable(&path)).then_some(path);
@@ -463,12 +482,10 @@ fn resolve_bin(name: &str) -> Option<PathBuf> {
     })
 }
 
-fn docker_cli() -> Result<PathBuf, String> {
+pub(crate) fn docker_cli() -> Result<PathBuf, String> {
     resolve_bin("docker")
         .or_else(|| resolve_bin("/usr/bin/docker"))
-        .ok_or_else(|| {
-            "Could not find the docker CLI. Install docker to open a container terminal.".into()
-        })
+        .ok_or_else(|| "Could not find the docker CLI. Install docker.".into())
 }
 
 fn docker_exec_argv(docker: &str, id: &str, shell: &str) -> Vec<String> {
@@ -1108,18 +1125,63 @@ fn normalize_image_ref(raw: &str) -> Result<String, String> {
     Ok(format!("{trimmed}:latest"))
 }
 
-fn parse_port_line(line: &str) -> Result<(String, String), String> {
+fn parse_port_line(line: &str) -> Result<(String, String, String), String> {
     let line = line.trim();
-    if let Some((host, container)) = line.split_once(':') {
+    let (rest, proto) = if let Some((rest, proto)) = line.rsplit_once('/') {
+        let proto = proto.to_ascii_lowercase();
+        if proto != "tcp" && proto != "udp" {
+            return Err(format!("Invalid port mapping: {line}"));
+        }
+        (rest, proto)
+    } else {
+        (line, "tcp".to_string())
+    };
+    if let Some((host, container)) = rest.split_once(':') {
         if host.parse::<u16>().is_err() || container.parse::<u16>().is_err() {
             return Err(format!("Invalid port mapping: {line}"));
         }
-        Ok((host.to_string(), container.to_string()))
-    } else if line.parse::<u16>().is_ok() {
-        Ok((line.to_string(), line.to_string()))
+        Ok((host.to_string(), container.to_string(), proto))
+    } else if rest.parse::<u16>().is_ok() {
+        Ok((rest.to_string(), rest.to_string(), proto))
     } else {
         Err(format!("Invalid port mapping: {line}"))
     }
+}
+
+fn parse_memory(value: &str) -> Result<Option<i64>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let split = value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (num, suffix) = value.split_at(split);
+    let amount: i64 = num
+        .parse()
+        .map_err(|_| format!("Invalid memory limit: {value}"))?;
+    let mul: i64 = match suffix.to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "ki" | "kib" => 1024,
+        "m" | "mb" | "mi" | "mib" => 1024 * 1024,
+        "g" | "gb" | "gi" | "gib" => 1024 * 1024 * 1024,
+        _ => return Err(format!("Invalid memory limit: {value}")),
+    };
+    let bytes = amount
+        .checked_mul(mul)
+        .ok_or_else(|| format!("Invalid memory limit: {value}"))?;
+    if bytes <= 0 {
+        return Err(format!("Invalid memory limit: {value}"));
+    }
+    Ok(Some(bytes))
+}
+
+fn optional_text(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
 }
 
 fn parse_mount_line(line: &str) -> Result<String, String> {
@@ -1695,11 +1757,27 @@ pub async fn image_search(term: String) -> Result<Vec<ImageSearchRow>, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
-        docker_exec_argv, first_child, hub_search_term, is_safe_docker_ref, list_tar_children,
-        parent_and_name, parse_dir_list, parse_mount_line, parse_restart, read_tar_file,
-        terminal_args_for, terminal_label,
+        compose_label, docker_exec_argv, first_child, hub_search_term, is_safe_docker_ref,
+        list_tar_children, parent_and_name, parse_dir_list, parse_memory, parse_mount_line,
+        parse_port_line, parse_restart, read_tar_file, terminal_args_for, terminal_label,
     };
+
+    #[test]
+    fn compose_label_reads_nonempty_compose_keys() {
+        let mut labels = HashMap::new();
+        labels.insert("com.docker.compose.project".into(), " web ".into());
+        labels.insert("com.docker.compose.service".into(), "".into());
+        let labels = Some(labels);
+        assert_eq!(
+            compose_label(&labels, "com.docker.compose.project").as_deref(),
+            Some("web")
+        );
+        assert_eq!(compose_label(&labels, "com.docker.compose.service"), None);
+        assert_eq!(compose_label(&None, "com.docker.compose.project"), None);
+    }
 
     #[test]
     fn hub_search_term_strips_tag_and_digest() {
@@ -1732,6 +1810,39 @@ mod tests {
         assert!(parse_restart("no").unwrap().is_none());
         assert!(parse_restart("unless-stopped").unwrap().is_some());
         assert!(parse_restart("sometimes").is_err());
+    }
+
+    #[test]
+    fn parse_port_line_accepts_proto_suffix() {
+        assert_eq!(
+            parse_port_line("80").unwrap(),
+            ("80".into(), "80".into(), "tcp".into())
+        );
+        assert_eq!(
+            parse_port_line("8080:80").unwrap(),
+            ("8080".into(), "80".into(), "tcp".into())
+        );
+        assert_eq!(
+            parse_port_line("53:53/udp").unwrap(),
+            ("53".into(), "53".into(), "udp".into())
+        );
+        assert_eq!(
+            parse_port_line("53/udp").unwrap(),
+            ("53".into(), "53".into(), "udp".into())
+        );
+        assert!(parse_port_line("53:53/sctp").is_err());
+        assert!(parse_port_line("abc").is_err());
+    }
+
+    #[test]
+    fn parse_memory_accepts_bytes_and_suffixes() {
+        assert_eq!(parse_memory("").unwrap(), None);
+        assert_eq!(parse_memory("512").unwrap(), Some(512));
+        assert_eq!(parse_memory("512m").unwrap(), Some(512 * 1024 * 1024));
+        assert_eq!(parse_memory("1g").unwrap(), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_memory("256MiB").unwrap(), Some(256 * 1024 * 1024));
+        assert!(parse_memory("0").is_err());
+        assert!(parse_memory("lots").is_err());
     }
 
     #[test]
@@ -1900,6 +2011,290 @@ pub async fn volumes_prune() -> Result<PruneResult, String> {
 }
 
 #[tauri::command]
+pub async fn networks_prune() -> Result<PruneResult, String> {
+    let result = docker()?.prune_networks(None).await.map_err(map_err)?;
+    Ok(PruneResult {
+        deleted: result.networks_deleted.unwrap_or_default().len() as i64,
+        space_reclaimed: 0,
+    })
+}
+
+#[derive(Serialize)]
+pub struct DiskUsageKind {
+    pub size: i64,
+    pub reclaimable: i64,
+}
+
+#[derive(Serialize)]
+pub struct DiskUsage {
+    pub images: DiskUsageKind,
+    pub containers: DiskUsageKind,
+    pub volumes: DiskUsageKind,
+}
+
+fn disk_kind(size: Option<i64>, reclaimable: Option<i64>) -> DiskUsageKind {
+    DiskUsageKind {
+        size: size.unwrap_or(0),
+        reclaimable: reclaimable.unwrap_or(0),
+    }
+}
+
+#[tauri::command]
+pub async fn system_df() -> Result<DiskUsage, String> {
+    let usage = docker()?
+        .df(None::<bollard::query_parameters::DataUsageOptions>)
+        .await
+        .map_err(map_err)?;
+    let images = usage.image_usage.as_ref();
+    let containers = usage.container_usage.as_ref();
+    let volumes = usage.volume_usage.as_ref();
+    Ok(DiskUsage {
+        images: disk_kind(
+            images.and_then(|row| row.total_size),
+            images.and_then(|row| row.reclaimable),
+        ),
+        containers: disk_kind(
+            containers.and_then(|row| row.total_size),
+            containers.and_then(|row| row.reclaimable),
+        ),
+        volumes: disk_kind(
+            volumes.and_then(|row| row.total_size),
+            volumes.and_then(|row| row.reclaimable),
+        ),
+    })
+}
+
+#[derive(Serialize)]
+pub struct ContainerStats {
+    pub id: String,
+    pub cpu_percent: f64,
+    pub memory_used: u64,
+    pub memory_limit: u64,
+    pub net_rx: u64,
+    pub net_tx: u64,
+}
+
+fn cpu_percent(stats: &bollard::models::ContainerStatsResponse) -> f64 {
+    let Some(cpu) = stats.cpu_stats.as_ref() else {
+        return 0.0;
+    };
+    let Some(pre) = stats.precpu_stats.as_ref() else {
+        return 0.0;
+    };
+    let total = cpu.cpu_usage.as_ref().and_then(|usage| usage.total_usage).unwrap_or(0);
+    let pre_total = pre.cpu_usage.as_ref().and_then(|usage| usage.total_usage).unwrap_or(0);
+    let system = cpu.system_cpu_usage.unwrap_or(0);
+    let pre_system = pre.system_cpu_usage.unwrap_or(0);
+    if total <= pre_total || system <= pre_system {
+        return 0.0;
+    }
+    let ncpu = cpu
+        .online_cpus
+        .filter(|count| *count > 0)
+        .or_else(|| {
+            cpu.cpu_usage
+                .as_ref()
+                .and_then(|usage| usage.percpu_usage.as_ref())
+                .map(|cores| cores.len() as u32)
+        })
+        .unwrap_or(1) as f64;
+    ((total - pre_total) as f64 / (system - pre_system) as f64) * ncpu * 100.0
+}
+
+#[tauri::command]
+pub async fn container_stats(id: String) -> Result<ContainerStats, String> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("Container is required".into());
+    }
+    let docker = docker()?;
+    let mut stream = docker.stats(
+        &id,
+        Some(StatsOptionsBuilder::default().stream(false).build()),
+    );
+    let stats = stream
+        .next()
+        .await
+        .ok_or_else(|| "No stats available".to_string())?
+        .map_err(map_err)?;
+    let memory = stats.memory_stats.as_ref();
+    let (net_rx, net_tx) = stats.networks.as_ref().map_or((0, 0), |networks| {
+        networks.values().fold((0, 0), |(rx, tx), iface| {
+            (
+                rx + iface.rx_bytes.unwrap_or(0),
+                tx + iface.tx_bytes.unwrap_or(0),
+            )
+        })
+    });
+    Ok(ContainerStats {
+        id: stats.id.clone().unwrap_or(id),
+        cpu_percent: cpu_percent(&stats),
+        memory_used: memory.and_then(|row| row.usage).unwrap_or(0),
+        memory_limit: memory.and_then(|row| row.limit).unwrap_or(0),
+        net_rx,
+        net_tx,
+    })
+}
+
+#[derive(Serialize)]
+pub struct EngineEvent {
+    #[serde(rename = "type")]
+    pub typ: String,
+    pub action: String,
+    pub actor_id: String,
+    pub actor_name: String,
+    pub time: i64,
+}
+
+#[tauri::command]
+pub async fn engine_events(since: Option<i64>) -> Result<Vec<EngineEvent>, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| err.to_string())?
+        .as_secs() as i64;
+    let since = since.filter(|value| *value > 0).unwrap_or(now.saturating_sub(300));
+    let until = now.max(since);
+    let mut filters = HashMap::new();
+    filters.insert(
+        "type",
+        vec!["container", "image", "volume", "network"],
+    );
+    let docker = docker()?;
+    let mut stream = docker.events(Some(
+        EventsOptionsBuilder::default()
+            .since(&since.to_string())
+            .until(&until.to_string())
+            .filters(&filters)
+            .build(),
+    ));
+    let mut rows = Vec::new();
+    while let Some(item) = stream.next().await {
+        let event = item.map_err(map_err)?;
+        let actor = event.actor.unwrap_or_default();
+        let actor_name = actor
+            .attributes
+            .as_ref()
+            .and_then(|attrs| attrs.get("name").cloned())
+            .unwrap_or_default();
+        rows.push(EngineEvent {
+            typ: event.typ.map(|value| value.to_string()).unwrap_or_default(),
+            action: event.action.unwrap_or_default(),
+            actor_id: actor.id.unwrap_or_default(),
+            actor_name,
+            time: event.time.unwrap_or(0),
+        });
+        if rows.len() >= 100 {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
+#[tauri::command]
+pub async fn network_connect(network: String, container: String) -> Result<(), String> {
+    let network = network.trim().to_string();
+    let container = container.trim().to_string();
+    if network.is_empty() || container.is_empty() {
+        return Err("Network and container are required".into());
+    }
+    docker()?
+        .connect_network(
+            &network,
+            NetworkConnectRequest {
+                container,
+                endpoint_config: None,
+            },
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn network_disconnect(network: String, container: String) -> Result<(), String> {
+    let network = network.trim().to_string();
+    let container = container.trim().to_string();
+    if network.is_empty() || container.is_empty() {
+        return Err("Network and container are required".into());
+    }
+    docker()?
+        .disconnect_network(
+            &network,
+            NetworkDisconnectRequest {
+                container,
+                force: None,
+            },
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn image_tag(id_or_name: String, repo: String, tag: Option<String>) -> Result<(), String> {
+    let id_or_name = id_or_name.trim().to_string();
+    let repo = repo.trim().to_string();
+    if id_or_name.is_empty() || repo.is_empty() {
+        return Err("Image and repository are required".into());
+    }
+    let tag = tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest");
+    docker()?
+        .tag_image(
+            &id_or_name,
+            Some(
+                TagImageOptionsBuilder::default()
+                    .repo(&repo)
+                    .tag(tag)
+                    .build(),
+            ),
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn image_save(id_or_name: String, dest_path: String) -> Result<(), String> {
+    let id_or_name = id_or_name.trim().to_string();
+    let dest_path = dest_path.trim().to_string();
+    if id_or_name.is_empty() {
+        return Err("Image is required".into());
+    }
+    if dest_path.is_empty() {
+        return Err("Destination path is required".into());
+    }
+    let mut file = std::fs::File::create(&dest_path).map_err(|err| err.to_string())?;
+    let mut stream = docker()?.export_image(&id_or_name);
+    while let Some(chunk) = stream.next().await {
+        file.write_all(&chunk.map_err(map_err)?)
+            .map_err(|err| err.to_string())?;
+    }
+    file.flush().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn image_load(src_path: String) -> Result<(), String> {
+    let src_path = src_path.trim().to_string();
+    if src_path.is_empty() {
+        return Err("Source path is required".into());
+    }
+    let bytes = std::fs::read(&src_path).map_err(|err| err.to_string())?;
+    let mut stream = docker()?.import_image(
+        ImportImageOptionsBuilder::default().build(),
+        body_full(bytes.into()),
+        None,
+    );
+    while let Some(item) = stream.next().await {
+        let info = item.map_err(map_err)?;
+        if let Some(message) = info.error_detail.and_then(|detail| detail.message) {
+            return Err(message);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn container_create(
     image: String,
     name: Option<String>,
@@ -1910,6 +2305,9 @@ pub async fn container_create(
     mounts: Vec<String>,
     network: Option<String>,
     restart: Option<String>,
+    user: Option<String>,
+    working_dir: Option<String>,
+    memory: Option<String>,
     start: bool,
 ) -> Result<String, String> {
     let image = normalize_image_ref(&image)?;
@@ -1919,8 +2317,8 @@ pub async fn container_create(
         if line.trim().is_empty() {
             continue;
         }
-        let (host, container) = parse_port_line(&line)?;
-        let key = format!("{container}/tcp");
+        let (host, container, proto) = parse_port_line(&line)?;
+        let key = format!("{container}/{proto}");
         if !exposed_ports.contains(&key) {
             exposed_ports.push(key.clone());
         }
@@ -1939,21 +2337,23 @@ pub async fn container_create(
         .filter(|line| !line.trim().is_empty())
         .map(|line| parse_mount_line(&line))
         .collect::<Result<Vec<_>, _>>()?;
-    let network = network
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
+    let network = optional_text(network);
+    let user = optional_text(user);
+    let working_dir = optional_text(working_dir);
+    let memory = parse_memory(memory.as_deref().unwrap_or(""))?;
     let restart_policy = parse_restart(restart.as_deref().unwrap_or(""))?;
     let needs_host = !port_bindings.is_empty()
         || !binds.is_empty()
         || network.is_some()
-        || restart_policy.is_some();
+        || restart_policy.is_some()
+        || memory.is_some();
 
     let body = ContainerCreateBody {
         image: Some(image),
         cmd: nonempty_args(cmd),
         entrypoint: nonempty_args(entrypoint),
+        user,
+        working_dir,
         env: if env.is_empty() { None } else { Some(env) },
         exposed_ports: if exposed_ports.is_empty() {
             None
@@ -1970,6 +2370,7 @@ pub async fn container_create(
                 binds: if binds.is_empty() { None } else { Some(binds) },
                 network_mode: network,
                 restart_policy,
+                memory,
                 ..Default::default()
             })
         } else {

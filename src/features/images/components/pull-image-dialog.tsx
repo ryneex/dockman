@@ -6,6 +6,7 @@ import { Controller, useForm, useWatch } from "react-hook-form"
 
 import { ImageSearchResults } from "@/components/common"
 import { Button } from "@/components/ui/button"
+import { ComboboxPopup } from "@/components/ui/combobox-popup"
 import { Field, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
@@ -76,8 +77,18 @@ export function PullImageDialog({
     setActive(-1)
   }
 
+  function dismissSearch() {
+    setPickedTerm(hubSearchTerm(reference))
+    setActive(-1)
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (!showResults || (!results.length && event.key !== "Escape")) return
+    if (event.key === "Escape" && showResults) {
+      event.preventDefault()
+      dismissSearch()
+      return
+    }
+    if (!showResults || !results.length) return
     if (event.key === "ArrowDown") {
       event.preventDefault()
       setActive((index) => (index + 1) % Math.max(results.length, 1))
@@ -116,33 +127,38 @@ export function PullImageDialog({
             hint="Pick a result or pull any exact name:tag."
             errors={[fieldState.error]}
           >
-            <TextInput
-              {...field}
-              onKeyDown={onKeyDown}
-              placeholder="nginx:latest"
-              autoFocus
-              role="combobox"
-              aria-expanded={showResults}
-              aria-controls={listId}
-              aria-autocomplete="list"
-              aria-invalid={fieldState.invalid}
-              autoComplete="off"
-              spellCheck={false}
-            />
+            <ComboboxPopup
+              open={showResults}
+              onDismiss={dismissSearch}
+              popup={
+                <ImageSearchResults
+                  listId={listId}
+                  results={results}
+                  searching={searching}
+                  searchError={searchError}
+                  active={active}
+                  emptyHint={`No images match “${term}”. You can still pull this name.`}
+                  onSelectHub={selectResult}
+                />
+              }
+            >
+              <TextInput
+                {...field}
+                onKeyDown={onKeyDown}
+                placeholder="nginx:latest"
+                autoFocus
+                role="combobox"
+                aria-expanded={showResults}
+                aria-controls={listId}
+                aria-autocomplete="list"
+                aria-invalid={fieldState.invalid}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </ComboboxPopup>
           </Field>
         )}
       />
-      {showResults ? (
-        <ImageSearchResults
-          listId={listId}
-          results={results}
-          searching={searching}
-          searchError={searchError}
-          active={active}
-          emptyHint={`No images match “${term}”. You can still pull this name.`}
-          onSelectHub={selectResult}
-        />
-      ) : null}
       {progress.length ? (
         <pre className="border-border bg-canvas text-muted max-h-28 overflow-auto rounded-[10px] border p-3 font-mono text-xs">
           {progress.join("\n")}

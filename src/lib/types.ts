@@ -20,9 +20,15 @@ export type ContainerRow = {
   state: string
   ports: string[]
   created: number
+  compose_project: string | null
+  compose_service: string | null
+  compose_id: string | null
+  compose_workdir: string | null
+  compose_config_files: string | null
 }
 
 export type UsageRef = {
+  id: string
   name: string
   state: string
 }
@@ -39,6 +45,34 @@ export type ImageRow = {
 export type PruneResult = {
   deleted: number
   space_reclaimed: number
+}
+
+export type DiskUsageKind = {
+  size: number
+  reclaimable: number
+}
+
+export type DiskUsage = {
+  images: DiskUsageKind
+  containers: DiskUsageKind
+  volumes: DiskUsageKind
+}
+
+export type ContainerStats = {
+  id: string
+  cpu_percent: number
+  memory_used: number
+  memory_limit: number
+  net_rx: number
+  net_tx: number
+}
+
+export type EngineEvent = {
+  type: string
+  action: string
+  actor_id: string
+  actor_name: string
+  time: number
 }
 
 export type RestartPolicy = "no" | "on-failure" | "always" | "unless-stopped"
@@ -94,4 +128,23 @@ export type FsEntry = {
 export type FsFile = {
   path: string
   text: string
+}
+
+export type StackRow = {
+  id: string
+  name: string
+  service_count: number
+  services: string[]
+  updated_at: number
+  last_project: string | null
+  projects: string[]
+}
+
+export type StackDetail = {
+  id: string
+  name: string
+  yaml: string
+  updated_at: number
+  last_project: string | null
+  projects: string[]
 }

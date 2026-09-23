@@ -1,4 +1,4 @@
-import { Box, Container, HardDrive, LayoutDashboard, Network, Settings } from "lucide-react"
+import { Box, Container, HardDrive, Layers, LayoutDashboard, Network, Settings } from "lucide-react"
 import { NavLink } from "react-router-dom"
 
 import { cn } from "@/lib/utils"
@@ -9,6 +9,7 @@ const links = [
   { to: "/images", label: "Images", icon: Box },
   { to: "/volumes", label: "Volumes", icon: HardDrive },
   { to: "/networks", label: "Networks", icon: Network },
+  { to: "/stacks", label: "Compose", icon: Layers },
 ]
 
 function NavItem({

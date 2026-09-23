@@ -1,12 +1,13 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Play, Plus } from "lucide-react"
+import { ChevronDown, Loader2, Play, Plus } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { Controller, useForm, useWatch } from "react-hook-form"
 
 import { ImageSearchResults } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { ComboboxPopup } from "@/components/ui/combobox-popup"
 import { Field, FieldPair, Select, TextArea, TextInput } from "@/components/ui/field"
 import { FormDialog } from "@/components/ui/form-dialog"
 import { api, listenImagePull } from "@/lib/api"
@@ -16,6 +17,7 @@ import { cmdFromInspect, exposedPortsFromInspect, resolveLocalImage } from "@/li
 import { useImageInspect, useImages, useNetworks } from "@/lib/queries"
 import type { ImageSearchRow, RestartPolicy } from "@/lib/types"
 import { useImageSearch } from "@/lib/use-image-search"
+import { cn } from "@/lib/utils"
 
 const RESTART_POLICIES: { value: RestartPolicy; label: string }[] = [
   { value: "no", label: "No" },
@@ -24,10 +26,21 @@ const RESTART_POLICIES: { value: RestartPolicy; label: string }[] = [
   { value: "unless-stopped", label: "Unless stopped" },
 ]
 
+function hasAdvancedValues(values?: RunContainerValues | null) {
+  if (!values) return false
+  return Boolean(
+    values.entrypoint.trim() || values.user.trim() || values.workdir.trim() || values.memory.trim(),
+  )
+}
+
 const emptyValues: RunContainerValues = {
   image: "",
   name: "",
   cmd: "",
+  entrypoint: "",
+  user: "",
+  workdir: "",
+  memory: "",
   ports: "",
   mounts: "",
   env: "",
@@ -62,6 +75,7 @@ export function RunContainerDialog({
   const [pendingLabel, setPendingLabel] = useState("Working…")
   const [pickedTerm, setPickedTerm] = useState<string | null>(null)
   const [active, setActive] = useState(-1)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   function log(line: string) {
     setProgress((current) => current.concat(line))
@@ -169,10 +183,13 @@ export function RunContainerDialog({
             ports: parseLines(values.ports),
             env: parseLines(values.env),
             cmd: parseLines(values.cmd),
-            entrypoint: [],
+            entrypoint: parseLines(values.entrypoint),
             mounts: parseLines(values.mounts),
             network: values.network || undefined,
             restart: values.restart,
+            user: values.user.trim() || undefined,
+            workingDir: values.workdir.trim() || undefined,
+            memory: values.memory.trim() || undefined,
             start: values.start,
           }),
         { pending: values.start ? "Starting…" : "Creating…" },
@@ -207,6 +224,7 @@ export function RunContainerDialog({
     const imageRef = initialValues?.image || initialImage
     setPickedTerm(imageRef.trim() ? hubSearchTerm(imageRef) : null)
     setActive(-1)
+    setAdvancedOpen(hasAdvancedValues(initialValues))
     lastPorts.current = initialValues?.ports ?? ""
     lastCmd.current = initialValues?.cmd ?? ""
     lastImageId.current = null
@@ -255,13 +273,24 @@ export function RunContainerDialog({
   )
 
   useEffect(() => {
-    setActive(-1)
-  }, [image, results, showPanel])
-
-  useEffect(() => {
     const node = logRef.current
     if (node) node.scrollTop = node.scrollHeight
   }, [progress, status])
+
+  const advancedError = Boolean(
+    form.formState.errors.entrypoint ||
+    form.formState.errors.user ||
+    form.formState.errors.workdir ||
+    form.formState.errors.memory,
+  )
+
+  useEffect(() => {
+    if (advancedError) setAdvancedOpen(true)
+  }, [advancedError])
+
+  useEffect(() => {
+    setActive(-1)
+  }, [image, results, showPanel])
 
   function selectLocal(tag: string) {
     form.setValue("image", tag, { shouldValidate: true })
@@ -285,8 +314,18 @@ export function RunContainerDialog({
     setActive(-1)
   }
 
+  function dismissSearch() {
+    setPickedTerm(hubSearchTerm(image))
+    setActive(-1)
+  }
+
   function onImageKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (!showPanel || (!items.length && event.key !== "Escape")) return
+    if (event.key === "Escape" && showPanel) {
+      event.preventDefault()
+      dismissSearch()
+      return
+    }
+    if (!showPanel || !items.length) return
     if (event.key === "ArrowDown") {
       event.preventDefault()
       setActive((index) => (index + 1) % Math.max(items.length, 1))
@@ -351,19 +390,37 @@ export function RunContainerDialog({
               name="image"
               control={form.control}
               render={({ field, fieldState }) => (
-                <TextInput
-                  {...field}
-                  onKeyDown={onImageKeyDown}
-                  placeholder="nginx:latest"
-                  autoFocus
-                  role="combobox"
-                  aria-expanded={showPanel}
-                  aria-controls={listId}
-                  aria-autocomplete="list"
-                  aria-invalid={fieldState.invalid}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
+                <ComboboxPopup
+                  open={showPanel}
+                  onDismiss={dismissSearch}
+                  popup={
+                    <ImageSearchResults
+                      listId={listId}
+                      localMatches={localMatches}
+                      results={results}
+                      searching={searching}
+                      searchError={searchError}
+                      active={active}
+                      emptyHint={`No images match “${term}”. You can still run this name.`}
+                      onSelectLocal={selectLocal}
+                      onSelectHub={selectHub}
+                    />
+                  }
+                >
+                  <TextInput
+                    {...field}
+                    onKeyDown={onImageKeyDown}
+                    placeholder="nginx:latest"
+                    autoFocus
+                    role="combobox"
+                    aria-expanded={showPanel}
+                    aria-controls={listId}
+                    aria-autocomplete="list"
+                    aria-invalid={fieldState.invalid}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </ComboboxPopup>
               )}
             />
           ),
@@ -383,19 +440,6 @@ export function RunContainerDialog({
           ),
         }}
       />
-      {showPanel ? (
-        <ImageSearchResults
-          listId={listId}
-          localMatches={localMatches}
-          results={results}
-          searching={searching}
-          searchError={searchError}
-          active={active}
-          emptyHint={`No images match “${term}”. You can still run this name.`}
-          onSelectLocal={selectLocal}
-          onSelectHub={selectHub}
-        />
-      ) : null}
       <Field
         label="Command"
         hint={
@@ -425,7 +469,7 @@ export function RunContainerDialog({
           label: "Ports",
           hint: suggestedPorts.length ? (
             ports.trim() === suggestedText ? (
-              `Image exposes ${suggestedPorts.join(", ")}`
+              `Image exposes ${suggestedPorts.join(", ")}. Proto suffixes like 53:53/udp work.`
             ) : (
               <>
                 Image exposes {suggestedPorts.join(", ")}.{" "}
@@ -442,7 +486,7 @@ export function RunContainerDialog({
               </>
             )
           ) : (
-            "One per line. 8080:80 or 80"
+            "One per line. 80, 8080:80, or 53:53/udp"
           ),
           errors: [form.formState.errors.ports],
           children: (
@@ -452,7 +496,7 @@ export function RunContainerDialog({
               render={({ field, fieldState }) => (
                 <TextArea
                   {...field}
-                  placeholder={suggestedPorts[0] ? suggestedPorts.join("\n") : "8080:80"}
+                  placeholder={suggestedPorts[0] ? suggestedPorts.join("\n") : "8080:80\n53:53/udp"}
                   className="min-h-20"
                   aria-invalid={fieldState.invalid}
                 />
@@ -537,6 +581,87 @@ export function RunContainerDialog({
           </Field>
         )}
       />
+      <div className="border-border grid gap-4 border-t pt-4">
+        <button
+          type="button"
+          className="text-muted hover:text-ink inline-flex items-center gap-1.5 text-sm"
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >
+          <ChevronDown
+            size={16}
+            className={cn("transition-transform", advancedOpen && "rotate-180")}
+          />
+          Advanced
+        </button>
+        <div className={advancedOpen ? "grid gap-4" : "hidden"}>
+          <Field
+            label="Entrypoint"
+            hint="One argument per line. Empty keeps the image ENTRYPOINT."
+            errors={[form.formState.errors.entrypoint]}
+          >
+            <Controller
+              name="entrypoint"
+              control={form.control}
+              render={({ field, fieldState }) => (
+                <TextArea
+                  {...field}
+                  placeholder="/docker-entrypoint.sh"
+                  className="min-h-20"
+                  aria-invalid={fieldState.invalid}
+                />
+              )}
+            />
+          </Field>
+          <FieldPair
+            left={{
+              label: "User",
+              hint: "UID, user, or user:group. Empty uses the image user.",
+              errors: [form.formState.errors.user],
+              children: (
+                <Controller
+                  name="user"
+                  control={form.control}
+                  render={({ field, fieldState }) => (
+                    <TextInput
+                      {...field}
+                      placeholder="www-data"
+                      aria-invalid={fieldState.invalid}
+                    />
+                  )}
+                />
+              ),
+            }}
+            right={{
+              label: "Working dir",
+              hint: "Absolute path. Empty uses the image WORKDIR.",
+              errors: [form.formState.errors.workdir],
+              children: (
+                <Controller
+                  name="workdir"
+                  control={form.control}
+                  render={({ field, fieldState }) => (
+                    <TextInput {...field} placeholder="/app" aria-invalid={fieldState.invalid} />
+                  )}
+                />
+              ),
+            }}
+          />
+          <Field
+            label="Memory"
+            hint="Bytes or Docker size like 512m / 1g. Empty is unlimited."
+            errors={[form.formState.errors.memory]}
+          >
+            <Controller
+              name="memory"
+              control={form.control}
+              render={({ field, fieldState }) => (
+                <TextInput {...field} placeholder="512m" aria-invalid={fieldState.invalid} />
+              )}
+            />
+          </Field>
+        </div>
+      </div>
       {status || progress.length ? (
         <div
           ref={logRef}

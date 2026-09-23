@@ -14,6 +14,7 @@ export function ImageSearchResults({
   emptyHint,
   onSelectLocal,
   onSelectHub,
+  className,
 }: {
   listId: string
   localMatches?: string[]
@@ -24,13 +25,10 @@ export function ImageSearchResults({
   emptyHint: string
   onSelectLocal?: (tag: string) => void
   onSelectHub: (row: ImageSearchRow) => void
+  className?: string
 }) {
   return (
-    <div
-      id={listId}
-      role="listbox"
-      className="border-border bg-canvas overflow-hidden rounded-[10px] border"
-    >
+    <div id={listId} role="listbox" className={cn("overflow-hidden", className)}>
       {localMatches?.length ? (
         <ul className="max-h-56 overflow-auto py-1">
           {localMatches.map((tag, index) => (

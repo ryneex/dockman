@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Download, Eraser, Play, RefreshCw, ScanSearch, Trash2 } from "lucide-react"
+import { Download, Eraser, FileDown, Play, RefreshCw, ScanSearch, Tag, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { CopyId, InspectDrawer, RowActions, UsedBy, usageNames } from "@/components/common"
+import { CopyId, RowActions, RowName, UsedBy, usageNames } from "@/components/common"
 import { ListPage } from "@/components/layouts"
 import { useFilter } from "@/components/providers"
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,11 @@ import type { ImageRow } from "@/lib/types"
 import { useSelection } from "@/lib/use-selection"
 import { useTableNav } from "@/lib/use-table-nav"
 
+import { ImageInspectDrawer } from "./image-inspect-drawer"
+import { LoadImageDialog } from "./load-image-dialog"
 import { PullImageDialog } from "./pull-image-dialog"
+import { SaveImageDialog } from "./save-image-dialog"
+import { TagImageDialog } from "./tag-image-dialog"
 
 export function ImagesPage() {
   const query = useImages()
@@ -31,7 +35,10 @@ export function ImagesPage() {
   const client = useQueryClient()
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [pullOpen, setPullOpen] = useState(false)
+  const [loadOpen, setLoadOpen] = useState(false)
   const [runImage, setRunImage] = useState<string | null>(null)
+  const [tagTarget, setTagTarget] = useState<ImageRow | null>(null)
+  const [saveTarget, setSaveTarget] = useState<ImageRow | null>(null)
   const [removeTarget, setRemoveTarget] = useState<ImageRow | null>(null)
   const [pruneOpen, setPruneOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -133,7 +140,7 @@ export function ImagesPage() {
       />
       <tbody>
         {rows.map((row, rowIndex) => (
-          <TRow key={row.id} active={rowIndex === index} onClick={() => setIndex(rowIndex)}>
+          <TRow key={row.id} active={rowIndex === index}>
             <TCell truncate={false}>
               <Checkbox
                 checked={selection.ids.has(row.id)}
@@ -142,9 +149,17 @@ export function ImagesPage() {
                 aria-label={`Select ${row.tags[0] || row.id}`}
               />
             </TCell>
-            <TCell>
+            <TCell truncate={false}>
               <span className="inline-flex min-w-0 items-center gap-2">
-                <span className="truncate">{row.tags.join(", ") || "<none>"}</span>
+                <RowName
+                  className="min-w-0"
+                  onClick={() => {
+                    setIndex(rowIndex)
+                    setInspectId(row.id)
+                  }}
+                >
+                  {row.tags.join(", ") || "<none>"}
+                </RowName>
                 {row.dangling ? (
                   <span className="bg-hover text-faint shrink-0 rounded-full px-2 py-0.5 text-xs">
                     dangling
@@ -179,6 +194,26 @@ export function ImagesPage() {
                   }}
                 >
                   <ScanSearch size={16} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip label="Tag">
+                <IconButton
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setTagTarget(row)
+                  }}
+                >
+                  <Tag size={16} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip label="Save">
+                <IconButton
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setSaveTarget(row)
+                  }}
+                >
+                  <FileDown size={16} />
                 </IconButton>
               </Tooltip>
               <Tooltip
@@ -216,6 +251,7 @@ export function ImagesPage() {
           <Button icon={<Eraser />} disabled={!unused.length} onClick={() => setPruneOpen(true)}>
             Prune unused
           </Button>
+          <LoadImageDialog open={loadOpen} onOpenChange={setLoadOpen} />
           <PullImageDialog open={pullOpen} onOpenChange={setPullOpen} />
         </>
       }
@@ -228,12 +264,30 @@ export function ImagesPage() {
           if (!next) setRunImage(null)
         }}
       />
-      <InspectDrawer
+      <ImageInspectDrawer
         open={Boolean(inspectId)}
         title={selected?.tags[0] ?? "Inspect image"}
+        row={selected}
         data={inspect.data}
         loading={inspect.isLoading}
+        error={inspect.isError ? String(inspect.error) : null}
         onClose={() => setInspectId(null)}
+      />
+      <TagImageDialog
+        open={Boolean(tagTarget)}
+        idOrName={tagTarget?.id ?? null}
+        currentTag={tagTarget?.tags[0] ?? ""}
+        onOpenChange={(next) => {
+          if (!next) setTagTarget(null)
+        }}
+      />
+      <SaveImageDialog
+        open={Boolean(saveTarget)}
+        idOrName={saveTarget?.id ?? null}
+        currentTag={saveTarget?.tags[0] ?? ""}
+        onOpenChange={(next) => {
+          if (!next) setSaveTarget(null)
+        }}
       />
       <ConfirmDialog
         open={Boolean(removeTarget)}
